@@ -2,9 +2,26 @@
     <!-- Required only for encrypted phone-to-PC remote access. User media is
          never sent to a nexGallery cloud storage service. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+ grants media access per collection. Android 14 can grant
+         access to only the photos and videos selected by the user. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+
+    <!-- Older Android versions use the legacy read permission. Write access is
+         requested only on Android 9 and earlier for user-initiated deletion. -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <application
         android:label="nexGallery"
         android:name="${applicationName}"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
