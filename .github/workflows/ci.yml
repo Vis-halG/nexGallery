@@ -97,7 +97,7 @@ jobs:
         working-directory: android
         run: bash ./gradlew -PallowDevelopmentSigning=true lintRelease
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nexGallery-android-development-signed
           if-no-files-found: error
@@ -125,7 +125,7 @@ jobs:
           flutter pub get
           flutter build windows --release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nexGallery-windows-foundation
           if-no-files-found: error
