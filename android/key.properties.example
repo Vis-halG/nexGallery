@@ -1,0 +1,4 @@
+storePassword=replace-with-a-secret
+keyPassword=replace-with-a-secret
+keyAlias=nexgallery
+storeFile=nexgallery-release.jks
