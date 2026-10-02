@@ -364,6 +364,81 @@ Version 1 treats the phone as a client and upload/backup source. Browsing the
 phone live from the PC is deferred because Android cannot reliably serve files
 in the background under Doze; phone-to-PC backup remains push based.
 
+### UX principles
+
+- The default screen opens directly to local photos without an account wall,
+  promotion carousel or advertisement.
+- Privacy and file location stay visible. `Phone`, `PC`, `Offline copy` and
+  connection-status labels use text/icons as well as color.
+- Common actions remain one tap away; advanced file/server controls use
+  progressive disclosure so the normal gallery stays calm.
+- Every destructive action explains what will happen, prefers recoverable Trash
+  and offers Undo where recovery is possible.
+- Planned or unavailable features carry an explicit status. A checkmark is used
+  only for a completed action, never for a roadmap item.
+- Material 3, system typography/icons and code-only surfaces provide a consistent
+  premium visual system without fonts, Lottie or large artwork in the APK.
+- A single calm violet accent, tonal surfaces and limited motion work in light,
+  dark and high-contrast environments.
+
+### Android interaction model
+
+- Four bottom destinations: `Photos`, `Library`, `My PC` and `Files`.
+- Photos uses a date-grouped lazy grid, fast date scrubber, pinch grid density,
+  full-screen swipe viewer and long-press multi-select with contextual actions.
+- Library exposes Albums, People, Places, Videos, Screenshots, Documents,
+  Memories, Duplicates and Cleanup. AI sections say `Processed on this device`.
+- My PC first-run flow has three steps: install/start the PC server, scan the QR
+  code and approve the phone on the PC. It always shows online/offline state,
+  source, last seen and transfer queue.
+- Files supports Phone/PC filters, breadcrumbs, list/grid choice, sort and safe
+  multi-select. Remote write actions are hidden until the device has permission.
+- Active transfer notifications have Pause/Resume/Cancel; mobile-data use shows
+  the expected file size before an original-quality download or stream.
+
+### Windows interaction model
+
+- Destinations: `This PC`, `Library`, `Server`, `Devices`, `Transfers` and
+  `Settings` in a persistent sidebar.
+- Keyboard navigation, visible focus, shortcuts, right-click menus, drag/drop,
+  hover feedback and resizable grid density are first-class interactions.
+- A details/preview pane is optional and remembers width. Narrow windows collapse
+  secondary panes without hiding the primary action.
+- Server shows allowed roots, listening state, paired devices, permissions and
+  recent security events without requiring the gallery window to stay open.
+
+### States and recovery
+
+Every feature defines loading, empty, permission-denied, partial-access, error,
+offline and success states before implementation. Each blocking state offers one
+clear next action, for example `Choose photos`, `Choose folder`, `Retry`,
+`Resume transfer` or `Open PC setup`. Indexing shows completed/total work and a
+Pause control. Cached PC metadata is visibly stale while the PC is offline.
+
+### Accessibility and responsive quality
+
+- Interactive targets are at least 48 dp on Android and remain keyboard reachable
+  on Windows.
+- Text supports 200% scaling without clipping; layouts reflow instead of reducing
+  font size. Contrast is at least 4.5:1 for normal text.
+- TalkBack/Narrator names, roles, values and live progress announcements are
+  included. Meaning never depends on color alone.
+- Reduced-motion settings disable decorative transitions; media autoplay is off
+  by default.
+- Adaptive checks cover 320x568, 360x640, 600/840 breakpoints, 1024x768 and
+  1440x900, plus dark theme, large text, RTL and keyboard-only use.
+
+### UI performance budget
+
+- Real media grids use builder delegates, database paging, thumbnail-sized decode
+  (`cacheWidth`/`cacheHeight`) and bounded prefetch instead of full originals.
+- Feature tabs initialize lazily. Inactive video players, image decoders and
+  background controllers are disposed so 2-3 GB devices remain usable.
+- Scrolling targets a steady 60 fps on the named low-end phones. Navigation and
+  selection feedback appear immediately even while indexing continues.
+- Desktop content is width constrained for readability; large windows add useful
+  columns or panes rather than stretching text and cards edge to edge.
+
 ## 10. PC power and failure behavior
 
 - PC must be powered, online and awake for remote access.
@@ -419,9 +494,9 @@ shrinking, Dart obfuscation and tree-shaken icons:
 
 | Development-signed artifact | Exact bytes | MiB |
 | --- | ---: | ---: |
-| ARM32 `app-armeabi-v7a-release.apk` | 12,255,793 | 11.69 |
-| ARM64 `app-arm64-v8a-release.apk` | 15,174,761 | 14.47 |
-| Universal ARM `app-release.apk` | 27,050,683 | 25.80 |
+| ARM32 `app-armeabi-v7a-release.apk` | 12,174,133 | 11.61 |
+| ARM64 `app-arm64-v8a-release.apk` | 15,043,949 | 14.35 |
+| Universal ARM `app-release.apk` | 26,837,947 | 25.59 |
 
 These are download-file sizes for the foundation UI, not installed sizes and
 not the final functional app. They must not be published because the current
