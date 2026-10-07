@@ -138,16 +138,25 @@ final class NexGalleryServer {
         stderr.writeln('nexGallery server request error: $error');
       },
     );
-    await _auditLog.record(
-      action: 'server.start',
-      outcome: 'success',
-      details: <String, Object?>{
-        'bind': address.address,
-        'port': server.port,
-        'lan': config.listenOnLan,
-        'tls': false,
-      },
-    );
+    try {
+      await _auditLog.record(
+        action: 'server.start',
+        outcome: 'success',
+        details: <String, Object?>{
+          'bind': address.address,
+          'port': server.port,
+          'lan': config.listenOnLan,
+          'tls': false,
+        },
+      );
+    } catch (_) {
+      _server = null;
+      final subscription = _subscription;
+      _subscription = null;
+      await subscription?.cancel();
+      await server.close(force: true);
+      rethrow;
+    }
   }
 
   Future<void> stop({bool force = false}) async {
@@ -682,26 +691,49 @@ final class NexGalleryServer {
           );
         }
 
-        final output = await part.open(mode: FileMode.append);
         var received = 0;
         try {
-          await for (final chunk in request) {
-            received += chunk.length;
-            if (received > config.maxUploadChunkBytes ||
-                offset + received > total ||
-                offset + received > config.maxUploadFileBytes) {
-              await output.truncate(offset);
+          final output = await part.open(mode: FileMode.append);
+          try {
+            await for (final chunk in request) {
+              received += chunk.length;
+              if (received > config.maxUploadChunkBytes ||
+                  offset + received > total ||
+                  offset + received > config.maxUploadFileBytes) {
+                throw const _ApiException(
+                  413,
+                  'upload_limit_exceeded',
+                  'Upload exceeds the configured limit.',
+                );
+              }
+              await output.writeFrom(chunk);
+            }
+            if (declaredChunk >= 0 && received != declaredChunk) {
               throw const _ApiException(
-                413,
-                'upload_limit_exceeded',
-                'Upload exceeds the configured limit.',
+                400,
+                'incomplete_chunk',
+                'Upload chunk ended before Content-Length bytes arrived.',
               );
             }
-            await output.writeFrom(chunk);
+            await output.flush();
+          } finally {
+            await output.close();
           }
-          await output.flush();
-        } finally {
-          await output.close();
+        } catch (error, stackTrace) {
+          try {
+            final rollback = await part.open(mode: FileMode.append);
+            try {
+              await rollback.truncate(offset);
+              await rollback.flush();
+            } finally {
+              await rollback.close();
+            }
+          } catch (rollbackError) {
+            stderr.writeln(
+              'Could not roll upload back to offset $offset: $rollbackError',
+            );
+          }
+          Error.throwWithStackTrace(error, stackTrace);
         }
         final nextOffset = offset + received;
         if (complete && nextOffset != total) {

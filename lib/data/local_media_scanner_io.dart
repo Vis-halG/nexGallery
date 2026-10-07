@@ -20,6 +20,12 @@ final class _IoLocalMediaScanner implements LocalMediaScanner {
   }) async {
     final settings = options ?? ScanOptions();
     final cancellation = cancellationToken ?? ScanCancellationToken();
+    final excludedPaths = settings.excludedPaths.map((path) =>
+      _normalizedPath(Directory(path).absolute.path).replaceAll(RegExp(r'/+$'), '')).toList();
+    bool excluded(String path) {
+      final normalized = _normalizedPath(File(path).absolute.path);
+      return excludedPaths.any((root) => normalized == root || normalized.startsWith('$root/'));
+    }
     final roots = rootPaths
         .map((path) => path.trim())
         .where((path) => path.isNotEmpty)
@@ -56,6 +62,7 @@ final class _IoLocalMediaScanner implements LocalMediaScanner {
     report();
     scanRoots:
     for (final rootPath in roots) {
+      if (excluded(rootPath)) continue;
       if (cancellation.isCancelled) break;
       final root = Directory(rootPath);
       currentPath = root.path;
@@ -83,6 +90,14 @@ final class _IoLocalMediaScanner implements LocalMediaScanner {
           )) {
             if (cancellation.isCancelled) break scanRoots;
             final name = _basename(entity.path);
+            if (excluded(entity.path)) continue;
+            // Transfer staging files and private protocol state are never
+            // presented as completed files, including in hidden-file mode.
+            final lowerName = name.toLowerCase();
+            if (lowerName.endsWith('.part') ||
+                lowerName.startsWith('.nexgallery-')) {
+              continue;
+            }
             if (!settings.includeHidden && _isHiddenOrSystemName(name)) {
               continue;
             }
@@ -103,6 +118,8 @@ final class _IoLocalMediaScanner implements LocalMediaScanner {
                 } else {
                   stoppedByLimit = true;
                 }
+              } else {
+                stoppedByLimit = true;
               }
               continue;
             }

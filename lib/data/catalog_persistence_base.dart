@@ -6,6 +6,12 @@ abstract interface class CatalogPersistence {
   Future<void> save(CatalogSnapshot snapshot);
 }
 
+/// Persistence stores that must drain background work before shutdown.
+abstract interface class CloseableCatalogPersistence
+    implements CatalogPersistence {
+  Future<void> close();
+}
+
 final class InMemoryCatalogPersistence implements CatalogPersistence {
   InMemoryCatalogPersistence([CatalogSnapshot? initial])
     : _snapshot = initial ?? CatalogSnapshot.empty();

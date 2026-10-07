@@ -50,4 +50,32 @@ void main() {
     expect(result.filesVisited, 0);
     expect(result.items, isEmpty);
   });
+
+  test('depth-limited scans report an incomplete result', () async {
+    final root = await Directory.systemTemp.createTemp('nex_gallery_depth_');
+    addTearDown(() => root.delete(recursive: true));
+    final nested = await Directory('${root.path}/nested').create();
+    await File('${nested.path}/photo.jpg').writeAsBytes(<int>[1]);
+    final result = await createLocalMediaScanner().scan(<String>[
+      root.path,
+    ], options: ScanOptions(maxDepth: 0));
+    expect(result.stoppedByLimit, isTrue);
+    expect(result.items, isEmpty);
+  });
+
+  test('transfer staging files stay out of the catalogue', () async {
+    final root = await Directory.systemTemp.createTemp('nex_gallery_staging_');
+    addTearDown(() => root.delete(recursive: true));
+    for (final name in <String>[
+      'complete.jpg',
+      'video.mp4.part',
+      '.nexgallery-transfer.json',
+    ]) {
+      await File('${root.path}/$name').writeAsBytes(<int>[1]);
+    }
+    final result = await createLocalMediaScanner().scan(<String>[
+      root.path,
+    ], options: ScanOptions(includeHidden: true));
+    expect(result.items.map((item) => item.name), <String>['complete.jpg']);
+  });
 }

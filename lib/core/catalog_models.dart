@@ -87,10 +87,12 @@ final class CatalogQuery {
     this.limit = 60,
     Iterable<MediaKind> kinds = const <MediaKind>[],
     Iterable<MediaSource> sources = const <MediaSource>[],
+    Iterable<String>? itemIds,
   }) : assert(offset >= 0),
        assert(limit > 0),
        kinds = Set<MediaKind>.unmodifiable(kinds),
-       sources = Set<MediaSource>.unmodifiable(sources);
+       sources = Set<MediaSource>.unmodifiable(sources),
+       itemIds = itemIds == null ? null : Set<String>.unmodifiable(itemIds);
 
   final String searchText;
   final MediaSection? section;
@@ -102,6 +104,9 @@ final class CatalogQuery {
   final int limit;
   final Set<MediaKind> kinds;
   final Set<MediaSource> sources;
+  /// An access-filtered identity set. Null means unrestricted; empty means no
+  /// currently authorized items, including when media permission was revoked.
+  final Set<String>? itemIds;
 
   CatalogQuery copyWith({
     String? searchText,
@@ -114,6 +119,7 @@ final class CatalogQuery {
     int? limit,
     Iterable<MediaKind>? kinds,
     Iterable<MediaSource>? sources,
+    Object? itemIds = _unset,
   }) => CatalogQuery(
     searchText: searchText ?? this.searchText,
     section: identical(section, _unset)
@@ -127,6 +133,7 @@ final class CatalogQuery {
     limit: limit ?? this.limit,
     kinds: kinds ?? this.kinds,
     sources: sources ?? this.sources,
+    itemIds: identical(itemIds, _unset) ? this.itemIds : itemIds as Iterable<String>?,
   );
 }
 

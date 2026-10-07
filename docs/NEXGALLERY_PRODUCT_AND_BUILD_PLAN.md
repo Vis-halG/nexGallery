@@ -1,18 +1,23 @@
 # nexGallery — Complete Product and Build Plan
 
-Status on 2 October 2026: requirements-aligned product/build plan and tested
-Android foundation. The repository currently implements the responsive Flutter
-shell, Android/Windows project scaffolding, release-size configuration, CI and
-widget tests. It does **not** yet implement media scanning, file operations, AI,
-the vault, the PC server, pairing, streaming or transfers. Every product feature
-below is planned until a release-verification record says otherwise.
+Status on 2 October 2026: active local-gallery prototype. The responsive Flutter
+app is connected to Android MediaStore/SAF and the Windows selected-folder
+scanner. It includes a persisted JSON catalogue, bounded timeline pages, a
+swipeable preview viewer, metadata, and basic virtual organization. A development
+PC server and transfer protocol also exist. Phase 1 remains in progress; the
+production architecture and security requirements below are still the targets.
+See [implementation status](IMPLEMENTATION_STATUS.md),
+[the current stack](TECH_STACK.md), and
+[verification](verification-2026-10-02.md) for the implemented boundaries.
 
 | Area | Implemented now | Planned work |
 | --- | --- | --- |
-| Shared app | Material 3 light/dark theme, responsive phone/desktop navigation, four honest foundation screens | Production navigation, settings, accessibility and localization |
-| Android build | API 24 minimum, API 36 target, ARM32/ARM64 split builds, R8/resource shrinking, obfuscation symbols | MediaStore/SAF, permissions, foreground transfer service and signed release |
-| Windows build | Flutter Windows runner and desktop layout | Local scanner, per-user server agent, installer, signing and updater |
-| Gallery/files/AI/remote access | Product and security design only | All functional phases in section 14 |
+| Shared app | Material 3 theme, adaptive navigation, paged timeline, swipe/zoom preview and metadata | Settings, full player, large-library performance, localization and remaining accessibility work |
+| Android | MediaStore/SAF bridge, permission states, platform thumbnails, open/share integration, ARM split builds | Device verification, permission-lifecycle hardening, foreground transfers and signed release |
+| Windows | Selected-folder scanner, persisted roots, unavailable-folder preservation, desktop layout and standalone server executable | SQLite, stable file identity, watcher, background agent, native desktop verification, installer and signing |
+| Organization | Virtual albums, favorites and archive; prototype Trash controls | Verified physical recovery across supported OS versions, editor, memories and vault |
+| Remote access | Opt-in development server, token pairing, path guards, range download and checksum-verified transfers | Production device keys, read-only scopes, encrypted transport setup, QR approval and full transfer UI |
+| Offline intelligence | Product design and explicit unavailable UI | Face embeddings, OCR, labels, places and cleanup |
 
 ## 1. Product definition
 
@@ -646,14 +651,15 @@ flutter test
 flutter build windows --release
 ```
 
-The future server-agent build adds:
+The development server core can already be compiled with:
 
 ```powershell
-dart compile exe windows/server/bin/server.dart `
-  -o build/windows/server/nexgallery_server.exe
+dart compile exe windows/server/bin/nex_gallery_server.dart `
+  -o windows/server/build/nex_gallery_server.exe
 ```
 
-That command becomes active only after the server source exists in Phase 4.
+This builds the current CLI server; the per-user background agent and named-pipe
+UI control specified in Phase 4 remain planned.
 
 ### Release signing
 

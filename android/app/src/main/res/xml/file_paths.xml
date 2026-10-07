@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Canonical-path checks in AndroidMediaBridge apply before either root is
+         shared. No external-storage or filesystem-root path is exposed. -->
+    <files-path
+        name="private_files"
+        path="." />
+    <cache-path
+        name="private_cache"
+        path="." />
+</paths>

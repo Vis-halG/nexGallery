@@ -83,6 +83,18 @@ android {
             } else if (allowDevelopmentSigning) {
                 signingConfigs.getByName("debug")
             } else {
+                null
+            }
+        }
+    }
+}
+
+// Keep project sync, debug builds and debug lint usable without a release key,
+// while still failing closed before any unsigned release work starts.
+if (!keystorePropertiesFile.exists() && !allowDevelopmentSigning) {
+    tasks.configureEach {
+        if (name == "preReleaseBuild") {
+            doFirst {
                 throw GradleException(
                     "Release signing is not configured. Add android/key.properties " +
                         "or explicitly pass -PallowDevelopmentSigning=true for a " +

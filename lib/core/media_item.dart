@@ -139,6 +139,7 @@ final class MediaItem {
     required this.indexedAt,
     this.section = MediaSection.library,
     this.isFavorite = false,
+    this.isAvailable = true,
     this.thumbnailUri,
     this.deletedAt,
   });
@@ -153,6 +154,10 @@ final class MediaItem {
   final DateTime indexedAt;
   final MediaSection section;
   final bool isFavorite;
+
+  /// Whether the original can be read. Unavailable entries keep their metadata
+  /// and user organization until a later scan can read their folder again.
+  final bool isAvailable;
   final String? thumbnailUri;
   final DateTime? deletedAt;
 
@@ -167,6 +172,7 @@ final class MediaItem {
     DateTime? indexedAt,
     MediaSection? section,
     bool? isFavorite,
+    bool? isAvailable,
     Object? thumbnailUri = _unset,
     Object? deletedAt = _unset,
   }) => MediaItem(
@@ -180,6 +186,7 @@ final class MediaItem {
     indexedAt: indexedAt ?? this.indexedAt,
     section: section ?? this.section,
     isFavorite: isFavorite ?? this.isFavorite,
+    isAvailable: isAvailable ?? this.isAvailable,
     thumbnailUri: identical(thumbnailUri, _unset)
         ? this.thumbnailUri
         : thumbnailUri as String?,
@@ -199,6 +206,7 @@ final class MediaItem {
     'indexedAt': indexedAt.toUtc().toIso8601String(),
     'section': section.name,
     'isFavorite': isFavorite,
+    'isAvailable': isAvailable,
     if (thumbnailUri != null) 'thumbnailUri': thumbnailUri,
     if (deletedAt != null) 'deletedAt': deletedAt!.toUtc().toIso8601String(),
   };
@@ -218,6 +226,7 @@ final class MediaItem {
       MediaSection.library,
     ),
     isFavorite: json['isFavorite'] as bool? ?? false,
+    isAvailable: json['isAvailable'] as bool? ?? true,
     thumbnailUri: json['thumbnailUri'] as String?,
     deletedAt: _dateTime(json['deletedAt']),
   );

@@ -17,11 +17,13 @@ final class ScanOptions {
     this.includeHidden = false,
     this.progressEveryFiles = 100,
     Iterable<MediaKind> kinds = const <MediaKind>[],
+    Iterable<String> excludedPaths = const <String>[],
   }) : assert(maxDepth >= 0),
        assert(maxFiles > 0),
        assert(maxDirectories > 0),
        assert(progressEveryFiles > 0),
-       kinds = Set<MediaKind>.unmodifiable(kinds);
+       kinds = Set<MediaKind>.unmodifiable(kinds),
+       excludedPaths = List<String>.unmodifiable(excludedPaths);
 
   final MediaSource source;
   final int maxDepth;
@@ -30,6 +32,7 @@ final class ScanOptions {
   final bool includeHidden;
   final int progressEveryFiles;
   final Set<MediaKind> kinds;
+  final List<String> excludedPaths;
 }
 
 final class ScanProgress {

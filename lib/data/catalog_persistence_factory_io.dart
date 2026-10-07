@@ -3,11 +3,18 @@ import 'dart:io';
 
 import '../core/catalog_models.dart';
 import 'catalog_persistence_base.dart';
+import 'sqlite_catalog_persistence.dart';
 
-CatalogPersistence createCatalogPersistence({String? databaseFilePath}) {
+CatalogPersistence createCatalogPersistence({
+  String? databaseFilePath,
+  String? legacyJsonFilePath,
+}) {
   final path = databaseFilePath?.trim();
   if (path == null || path.isEmpty) return InMemoryCatalogPersistence();
-  return ResilientCatalogPersistence(JsonFileCatalogPersistence(path));
+  if (path.toLowerCase().endsWith('.json')) {
+    return ResilientCatalogPersistence(JsonFileCatalogPersistence(path));
+  }
+  return SqliteCatalogPersistence(path, legacyJsonFilePath: legacyJsonFilePath);
 }
 
 final class JsonFileCatalogPersistence implements CatalogPersistence {

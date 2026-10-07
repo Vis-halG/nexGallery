@@ -19,16 +19,21 @@ import android.os.Looper
 import android.os.StatFs
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Size
+import androidx.annotation.RequiresApi
+import androidx.core.content.FileProvider
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.FileNotFoundException
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
@@ -44,8 +49,9 @@ import kotlin.math.roundToInt
  * Dependency-free Android MediaStore bridge.
  *
  * All public results contain primitive values, lists, maps, or byte arrays so
- * they can be decoded by Flutter's StandardMessageCodec. Media is addressed by
- * content URI; filesystem paths are deliberately never exposed.
+ * they can be decoded by Flutter's StandardMessageCodec. User media is
+ * addressed by content URI; exposed filesystem paths are restricted to this
+ * app's private files and cache directories.
  */
 class AndroidMediaBridge(
     private val activity: Activity,
@@ -62,7 +68,9 @@ class AndroidMediaBridge(
     private var consentCount = 0
     private var consentDeletedCount = 0
     private var directoryPickerResult: MethodChannel.Result? = null
+    private var documentPickerResult: MethodChannel.Result? = null
     private val secretLock = Any()
+    private val cacheFileLock = Any()
 
     init {
         channel.setMethodCallHandler(this)
@@ -82,6 +90,10 @@ class AndroidMediaBridge(
                 "getStorageStats" -> runAsync(result) { storageStats() }
                 "getAppDataPath" -> result.success(activity.filesDir.absolutePath)
                 "pickDirectory" -> pickDirectory(result)
+                "pickDocument" -> pickDocument(result)
+                "copyDocumentToAppCache" -> runAsync(result) { copyDocumentToAppCache(call) }
+                "openAppFile" -> openAppFile(call, result)
+                "shareAppFile" -> shareAppFile(call, result)
                 "getPersistedDirectories" -> runAsync(result) { persistedDirectories() }
                 "listDirectory" -> runAsync(result) { listDirectory(call) }
                 "createDirectory" -> runAsync(result) { createDirectory(call) }
@@ -97,6 +109,15 @@ class AndroidMediaBridge(
             result.error(error.code, error.message, null)
         } catch (error: SecurityException) {
             result.error("permission_denied", error.message, null)
+        } catch (error: Exception) {
+            // Synchronous framework calls such as MediaStore consent creation
+            // can reject a malformed or unsupported provider URI. Always finish
+            // the MethodChannel call instead of leaving Flutter waiting forever.
+            result.error(
+                "android_media_error",
+                error.message ?: "Android could not complete the media operation",
+                null,
+            )
         }
     }
 
@@ -109,6 +130,8 @@ class AndroidMediaBridge(
         consentResult = null
         directoryPickerResult?.error("activity_destroyed", "Activity closed during folder selection", null)
         directoryPickerResult = null
+        documentPickerResult?.error("activity_destroyed", "Activity closed during document selection", null)
+        documentPickerResult = null
     }
 
     fun onRequestPermissionsResult(requestCode: Int): Boolean {
@@ -122,6 +145,26 @@ class AndroidMediaBridge(
     }
 
     fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode == DOCUMENT_PICKER_REQUEST && documentPickerResult != null) {
+            val result = documentPickerResult
+            documentPickerResult = null
+            if (resultCode != Activity.RESULT_OK || data?.data == null) {
+                result?.success(mapOf("status" to "cancelled"))
+                return true
+            }
+            val uri = try {
+                validatedUri(data.data!!.toString())
+            } catch (error: BridgeException) {
+                result?.error(error.code, error.message, null)
+                return true
+            }
+            val canRead = data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0
+            val persisted = canRead && persistUriGrant(uri, read = true, write = false)
+            if (result != null) {
+                runAsync(result) { documentDescriptor(uri, "selected", persisted) }
+            }
+            return true
+        }
         if (requestCode == DIRECTORY_PICKER_REQUEST && directoryPickerResult != null) {
             val result = directoryPickerResult
             directoryPickerResult = null
@@ -180,7 +223,7 @@ class AndroidMediaBridge(
     }
 
     private fun requestPermissions(call: MethodCall, result: MethodChannel.Result) {
-        if (permissionResult != null || directoryPickerResult != null || consentResult != null) {
+        if (hasPendingSystemRequest()) {
             result.error("permission_request_active", "Another permission request is in progress", null)
             return
         }
@@ -193,20 +236,25 @@ class AndroidMediaBridge(
         }
         permissionResult = result
         permissionTypes = kinds
-        activity.requestPermissions(needed.toTypedArray(), PERMISSION_REQUEST)
+        try {
+            activity.requestPermissions(needed.toTypedArray(), PERMISSION_REQUEST)
+        } catch (error: Exception) {
+            permissionResult = null
+            permissionTypes = emptySet()
+            throw error
+        }
     }
 
     private fun permissionStatus(kinds: Set<MediaKind>): Map<String, Any> {
         val requested = if (kinds.isEmpty()) MediaKind.entries.toSet() else kinds
         val statuses = linkedMapOf<String, String>()
         requested.forEach { kind -> statuses[kind.wireName] = permissionFor(kind) }
+        val visualStatuses = requested
+            .filter { it != MediaKind.AUDIO }
+            .map(::permissionFor)
         val visualAccess = when {
-            Build.VERSION.SDK_INT < 33 ->
-                if (isGranted(Manifest.permission.READ_EXTERNAL_STORAGE)) "full" else "denied"
-            (isGranted(Manifest.permission.READ_MEDIA_IMAGES) ||
-                isGranted(Manifest.permission.READ_MEDIA_VIDEO)) -> "full"
-            Build.VERSION.SDK_INT >= 34 &&
-                isGranted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) -> "partial"
+            visualStatuses.isNotEmpty() && visualStatuses.all { it == "granted" } -> "full"
+            visualStatuses.any { it == "granted" || it == "partial" } -> "partial"
             else -> "denied"
         }
         return mapOf(
@@ -462,7 +510,7 @@ class AndroidMediaBridge(
     }
 
     private fun deleteOrTrash(call: MethodCall, result: MethodChannel.Result, trash: Boolean) {
-        if (consentResult != null || directoryPickerResult != null || permissionResult != null) {
+        if (hasPendingSystemRequest()) {
             result.error("media_consent_active", "Another media consent request is in progress", null)
             return
         }
@@ -545,7 +593,7 @@ class AndroidMediaBridge(
         }
     }
 
-    @android.annotation.TargetApi(29)
+    @RequiresApi(29)
     private fun launchRecoverableDeleteConsent(
         recoverable: RecoverableSecurityException,
         result: MethodChannel.Result,
@@ -640,7 +688,7 @@ class AndroidMediaBridge(
     }
 
     private fun pickDirectory(result: MethodChannel.Result) {
-        if (directoryPickerResult != null || permissionResult != null || consentResult != null) {
+        if (hasPendingSystemRequest()) {
             result.error("system_request_active", "Another Android system request is in progress", null)
             return
         }
@@ -658,17 +706,21 @@ class AndroidMediaBridge(
         } catch (error: ActivityNotFoundException) {
             directoryPickerResult = null
             result.success(mapOf("status" to "unavailable"))
+        } catch (error: Exception) {
+            directoryPickerResult = null
+            throw error
         }
     }
 
     private fun persistDirectoryGrant(uri: Uri, canRead: Boolean, canWrite: Boolean): Boolean {
-        val flags = when {
-            canRead && canWrite ->
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            canRead -> Intent.FLAG_GRANT_READ_URI_PERMISSION
-            canWrite -> Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            else -> return false
-        }
+        return persistUriGrant(uri, canRead, canWrite)
+    }
+
+    private fun persistUriGrant(uri: Uri, read: Boolean, write: Boolean): Boolean {
+        val flags =
+            (if (read) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+                (if (write) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+        if (flags == 0) return false
         return try {
             resolver.takePersistableUriPermission(uri, flags)
             true
@@ -676,7 +728,178 @@ class AndroidMediaBridge(
             // Some document providers grant session access but do not support
             // persisted grants. Surface that state to Flutter.
             false
+        } catch (_: IllegalArgumentException) {
+            false
         }
+    }
+
+    private fun pickDocument(result: MethodChannel.Result) {
+        if (hasPendingSystemRequest()) {
+            result.error("system_request_active", "Another Android system request is in progress", null)
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+            )
+        }
+        documentPickerResult = result
+        try {
+            activity.startActivityForResult(intent, DOCUMENT_PICKER_REQUEST)
+        } catch (error: ActivityNotFoundException) {
+            documentPickerResult = null
+            result.success(mapOf("status" to "unavailable"))
+        } catch (error: Exception) {
+            documentPickerResult = null
+            throw error
+        }
+    }
+
+    private fun documentDescriptor(
+        uri: Uri,
+        status: String,
+        persisted: Boolean,
+    ): Map<String, Any?> {
+        val metadata = documentMetadata(uri)
+        return mapOf(
+            "status" to status,
+            "uri" to uri.toString(),
+            "name" to metadata.name,
+            "mimeType" to metadata.mimeType,
+            "size" to metadata.size,
+            "persisted" to persisted,
+        )
+    }
+
+    private fun documentMetadata(uri: Uri): DocumentMetadata {
+        var name: String? = null
+        var size: Long? = null
+        resolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                name = cursor.string(OpenableColumns.DISPLAY_NAME)
+                size = cursor.long(OpenableColumns.SIZE)
+            }
+        }
+        return DocumentMetadata(
+            name = name,
+            mimeType = resolver.getType(uri),
+            size = size,
+        )
+    }
+
+    private fun copyDocumentToAppCache(call: MethodCall): Map<String, Any?> {
+        val uri = validatedUri(call.argument<String>("uri"))
+        val metadata = documentMetadata(uri)
+        val safeName = sanitizedFileName(metadata.name ?: "document")
+        val directory = File(activity.cacheDir, IMPORT_CACHE_DIRECTORY)
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw BridgeException("cache_unavailable", "Android could not create the transfer cache")
+        }
+        val target = reserveCacheFile(directory, safeName)
+        try {
+            val copied = resolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(target, false).use { output -> input.copyTo(output, COPY_BUFFER_SIZE) }
+            } ?: throw FileNotFoundException("Could not open $uri")
+            return mapOf(
+                "path" to target.absolutePath,
+                "size" to copied,
+                "name" to target.name,
+                "mimeType" to (metadata.mimeType ?: "application/octet-stream"),
+            )
+        } catch (error: Exception) {
+            target.delete()
+            throw error
+        }
+    }
+
+    private fun reserveCacheFile(directory: File, name: String): File = synchronized(cacheFileLock) {
+        val dot = name.lastIndexOf('.').takeIf { it > 0 } ?: name.length
+        val stem = name.substring(0, dot)
+        val extension = name.substring(dot)
+        for (index in 0..MAX_CACHE_NAME_ATTEMPTS) {
+            val suffix = if (index == 0) "" else " ($index)"
+            val maxStemLength = (MAX_CACHE_FILE_NAME_CHARS - extension.length - suffix.length)
+                .coerceAtLeast(1)
+            val candidateName = stem.take(maxStemLength) + suffix + extension
+            val candidate = File(directory, candidateName)
+            if (candidate.createNewFile()) return@synchronized candidate
+        }
+        throw BridgeException("cache_name_exhausted", "Android could not reserve a transfer filename")
+    }
+
+    private fun sanitizedFileName(value: String): String {
+        val cleaned = value
+            .replace(UNSAFE_FILE_NAME_CHARACTERS, "_")
+            .trim()
+            .trim('.')
+        return (cleaned.ifEmpty { "document" }).take(MAX_CACHE_FILE_NAME_CHARS)
+    }
+
+    private fun openAppFile(call: MethodCall, result: MethodChannel.Result) {
+        val (file, uri, mimeType) = appFileIntentData(call)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newUri(resolver, file.name, uri)
+        }
+        launchIntent(intent, result)
+    }
+
+    private fun shareAppFile(call: MethodCall, result: MethodChannel.Result) {
+        val (file, uri, mimeType) = appFileIntentData(call)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newUri(resolver, file.name, uri)
+            putExtra(Intent.EXTRA_STREAM, uri)
+        }
+        val title = call.argument<String>("chooserTitle") ?: "Share file"
+        launchIntent(Intent.createChooser(intent, title), result)
+    }
+
+    private fun appFileIntentData(call: MethodCall): AppFileIntentData {
+        val file = validatedAppFile(call.argument<String>("path"))
+        val uri = FileProvider.getUriForFile(
+            activity,
+            "${activity.packageName}.fileprovider",
+            file,
+        )
+        val requestedMime = call.argument<String>("mimeType")
+        if (requestedMime != null && !MIME_TYPE_PATTERN.matches(requestedMime)) {
+            throw BridgeException("invalid_mime_type", "mimeType is invalid")
+        }
+        return AppFileIntentData(
+            file,
+            uri,
+            requestedMime ?: resolver.getType(uri) ?: "application/octet-stream",
+        )
+    }
+
+    private fun validatedAppFile(value: String?): File {
+        if (value.isNullOrBlank()) {
+            throw BridgeException("invalid_path", "An app-private file path is required")
+        }
+        val file = File(value).canonicalFile
+        val roots = listOf(activity.filesDir.canonicalFile, activity.cacheDir.canonicalFile)
+        val insideAppStorage = roots.any { root ->
+            file.path.startsWith(root.path + File.separator)
+        }
+        if (!insideAppStorage) {
+            throw BridgeException("path_not_allowed", "Only app-private files can be opened or shared")
+        }
+        if (!file.isFile) {
+            throw FileNotFoundException("App-private file does not exist")
+        }
+        return file
     }
 
     private fun persistedDirectories(): List<Map<String, Any?>> =
@@ -1025,6 +1248,12 @@ class AndroidMediaBridge(
         consentDeletedCount = 0
     }
 
+    private fun hasPendingSystemRequest(): Boolean =
+        permissionResult != null ||
+            consentResult != null ||
+            directoryPickerResult != null ||
+            documentPickerResult != null
+
     private fun runAsync(result: MethodChannel.Result, operation: () -> Any?) {
         worker.execute {
             try {
@@ -1068,6 +1297,18 @@ class AndroidMediaBridge(
         }
     }
 
+    private data class DocumentMetadata(
+        val name: String?,
+        val mimeType: String?,
+        val size: Long?,
+    )
+
+    private data class AppFileIntentData(
+        val file: File,
+        val uri: Uri,
+        val mimeType: String,
+    )
+
     private class BridgeException(val code: String, override val message: String) : Exception(message)
 
     companion object {
@@ -1075,8 +1316,13 @@ class AndroidMediaBridge(
         private const val PERMISSION_REQUEST = 7401
         private const val CONSENT_REQUEST = 7402
         private const val DIRECTORY_PICKER_REQUEST = 7403
+        private const val DOCUMENT_PICKER_REQUEST = 7404
         private const val MAX_PAGE_SIZE = 500
         private const val MAX_THUMBNAIL_SIZE = 1024
+        private const val COPY_BUFFER_SIZE = 64 * 1024
+        private const val MAX_CACHE_FILE_NAME_CHARS = 128
+        private const val MAX_CACHE_NAME_ATTEMPTS = 999
+        private const val IMPORT_CACHE_DIRECTORY = "incoming_transfers"
         private const val MAX_SECRET_BYTES = 16 * 1024
         private const val MIN_SECRET_PAYLOAD_BYTES = 2 + 12 + 16
         private const val GCM_TAG_BITS = 128
@@ -1086,5 +1332,7 @@ class AndroidMediaBridge(
         private const val SECRET_TRANSFORMATION = "AES/GCM/NoPadding"
         private const val SECRET_FORMAT_VERSION: Byte = 1
         private val SECRET_NAME_PATTERN = Regex("^[A-Za-z0-9._-]{1,128}$")
+        private val MIME_TYPE_PATTERN = Regex("^[A-Za-z0-9.+*-]+/[A-Za-z0-9.+*-]+$")
+        private val UNSAFE_FILE_NAME_CHARACTERS = Regex("[\\\\/\\u0000-\\u001F\\u007F]")
     }
 }

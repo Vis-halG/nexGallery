@@ -21,10 +21,12 @@ final class MediaCatalogRepository {
   static Future<MediaCatalogRepository> open({
     CatalogPersistence? persistence,
     String? databaseFilePath,
+    String? legacyJsonFilePath,
   }) async {
     final selectedPersistence =
         persistence ??
-        createCatalogPersistence(databaseFilePath: databaseFilePath);
+        createCatalogPersistence(databaseFilePath: databaseFilePath,
+          legacyJsonFilePath: legacyJsonFilePath);
     final snapshot = await selectedPersistence.load();
     return MediaCatalogRepository._(
       persistence: selectedPersistence,
@@ -57,6 +59,9 @@ final class MediaCatalogRepository {
   CatalogPage<MediaItem> query([CatalogQuery? request]) {
     final query = request ?? CatalogQuery();
     Iterable<MediaItem> result = _items.values;
+    if (query.itemIds case final itemIds?) {
+      result = result.where((item) => itemIds.contains(item.id));
+    }
 
     if (query.section case final section?) {
       result = result.where((item) => item.section == section);
@@ -170,6 +175,49 @@ final class MediaCatalogRepository {
 
   Future<void> upsert(MediaItem item, {bool preserveUserState = true}) =>
       upsertAll(<MediaItem>[item], preserveUserState: preserveUserState);
+
+  /// Reconciles a physical snapshot while preserving user organization.
+  /// Incomplete scans must set [removeMissing] to false: a missing observation
+  /// does not prove that a file was deleted.
+  Future<int> synchronizeSource(
+    MediaSource source,
+    Iterable<MediaItem> scannedItems, {
+    bool removeMissing = true,
+    Set<MediaKind>? scannedKinds,
+    bool preserveTrash = true,
+  }) => _mutate<int>(() {
+    final incoming = <String, MediaItem>{
+      for (final item in scannedItems)
+        if (item.id.isNotEmpty && item.source == source) item.id: item,
+    };
+    for (final entry in incoming.entries) {
+      final existing = _items[entry.key];
+      _items[entry.key] = existing == null
+          ? entry.value
+          : entry.value.copyWith(
+              section: existing.section,
+              isFavorite: existing.isFavorite,
+              thumbnailUri: existing.thumbnailUri,
+              deletedAt: existing.deletedAt,
+            );
+    }
+    final staleIds = _items.values
+        .where(
+          (item) =>
+              item.source == source &&
+              removeMissing &&
+              (scannedKinds == null || scannedKinds.contains(item.kind)) &&
+              (!preserveTrash || item.section != MediaSection.trash) &&
+              !incoming.containsKey(item.id),
+        )
+        .map((item) => item.id)
+        .toList(growable: false);
+    for (final id in staleIds) {
+      _items.remove(id);
+      _removeItemFromEveryAlbum(id);
+    }
+    return staleIds.length;
+  });
 
   Future<void> upsertAll(
     Iterable<MediaItem> items, {
@@ -341,6 +389,9 @@ final class MediaCatalogRepository {
     _disposed = true;
     await _writeQueue;
     await _changes.close();
+    if (_persistence case final CloseableCatalogPersistence persistence) {
+      await persistence.close();
+    }
   }
 
   Future<T> _mutate<T>(T Function() operation) {
@@ -349,6 +400,8 @@ final class MediaCatalogRepository {
     }
     final completer = Completer<T>();
     _writeQueue = _writeQueue.then((_) async {
+      final previousItems = Map<String, MediaItem>.of(_items);
+      final previousAlbums = Map<String, MediaAlbum>.of(_albums);
       try {
         final result = operation();
         final updated = snapshot;
@@ -356,6 +409,8 @@ final class MediaCatalogRepository {
         if (!_changes.isClosed) _changes.add(updated);
         completer.complete(result);
       } catch (error, stackTrace) {
+        _items..clear()..addAll(previousItems);
+        _albums..clear()..addAll(previousAlbums);
         completer.completeError(error, stackTrace);
       }
     });
@@ -408,9 +463,8 @@ int _compareItems(MediaItem left, MediaItem right, CatalogQuery query) {
     case CatalogSortField.createdAt:
       comparison = _fallbackDate(left).compareTo(_fallbackDate(right));
     case CatalogSortField.takenAt:
-      comparison = (left.metadata.takenAt ?? _fallbackDate(left)).compareTo(
-        right.metadata.takenAt ?? _fallbackDate(right),
-      );
+      comparison = (left.metadata.takenAt ?? left.metadata.modifiedAt)
+          .compareTo(right.metadata.takenAt ?? right.metadata.modifiedAt);
     case CatalogSortField.size:
       comparison = left.metadata.sizeBytes.compareTo(right.metadata.sizeBytes);
     case CatalogSortField.kind:

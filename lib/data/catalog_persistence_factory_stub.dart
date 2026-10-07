@@ -1,4 +1,6 @@
 import 'catalog_persistence_base.dart';
 
-CatalogPersistence createCatalogPersistence({String? databaseFilePath}) =>
-    InMemoryCatalogPersistence();
+CatalogPersistence createCatalogPersistence({
+  String? databaseFilePath,
+  String? legacyJsonFilePath,
+}) => InMemoryCatalogPersistence();

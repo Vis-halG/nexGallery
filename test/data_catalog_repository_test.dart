@@ -82,6 +82,47 @@ void main() {
       expect(refreshed?.isFavorite, isTrue);
       expect(refreshed?.section, MediaSection.archive);
     });
+
+    test(
+      'only complete snapshots remove stale items and album membership',
+      () async {
+        final repository = await MediaCatalogRepository.open(
+          persistence: InMemoryCatalogPersistence(),
+        );
+        addTearDown(repository.dispose);
+        final first = _item('first', 'First.jpg', MediaKind.image, 1);
+        final missing = _item('missing', 'Missing.jpg', MediaKind.image, 2);
+        await repository.upsertAll(<MediaItem>[first, missing]);
+        await repository.setFavorite(missing.id, true);
+        final album = await repository.createAlbum('Family');
+        await repository.addToAlbum(album.id, <String>[missing.id]);
+
+        await repository.synchronizeSource(MediaSource.phone, <MediaItem>[
+          first,
+        ], removeMissing: false);
+        expect(repository.itemCount, 2);
+        expect(repository.itemById(missing.id)?.isFavorite, isTrue);
+        expect(repository.albumById(album.id)?.itemIds, <String>[missing.id]);
+
+        await repository.synchronizeSource(MediaSource.phone, <MediaItem>[
+          first,
+        ]);
+        expect(repository.itemCount, 1);
+        expect(repository.itemById(missing.id), isNull);
+        expect(repository.albumById(album.id)?.itemIds, isEmpty);
+      },
+    );
+
+    test(
+      'availability is persistent and older catalogues default to available',
+      () {
+        final original = _item('id', 'Photo.jpg', MediaKind.image, 1);
+        final unavailable = original.copyWith(isAvailable: false);
+        expect(MediaItem.fromJson(unavailable.toJson()).isAvailable, isFalse);
+        final legacy = original.toJson()..remove('isAvailable');
+        expect(MediaItem.fromJson(legacy).isAvailable, isTrue);
+      },
+    );
   });
 
   test('media models round-trip optional metadata through JSON', () {

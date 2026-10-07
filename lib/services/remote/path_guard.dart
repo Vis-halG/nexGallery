@@ -182,7 +182,7 @@ final class PathGuard {
     if (_samePath(rootPath, absolutePath)) {
       return '';
     }
-    return absolutePath.substring(rootPath.length + 1).replaceAll('\\', '/');
+    return _relativeSuffix(rootPath, absolutePath);
   }
 
   bool containsAbsolutePath(String absolutePath) {
@@ -225,10 +225,11 @@ final class PathGuard {
   static void _requireContained(String root, String candidate) {
     final comparableRoot = _comparable(root);
     final comparableCandidate = _comparable(candidate);
+    final containmentPrefix = _hasTrailingSeparator(comparableRoot)
+        ? comparableRoot
+        : '$comparableRoot${Platform.pathSeparator}';
     if (comparableCandidate != comparableRoot &&
-        !comparableCandidate.startsWith(
-          '$comparableRoot${Platform.pathSeparator}',
-        )) {
+        !comparableCandidate.startsWith(containmentPrefix)) {
       throw const RemotePathException(
         'Path escapes the allowed root.',
         statusCode: 403,
@@ -238,7 +239,7 @@ final class PathGuard {
 
   static void _requirePublicPath(String root, String candidate) {
     if (_samePath(root, candidate)) return;
-    final relative = candidate.substring(root.length + 1).replaceAll('\\', '/');
+    final relative = _relativeSuffix(root, candidate);
     if (relative
         .split('/')
         .any((segment) => segment.toLowerCase().startsWith('.nexgallery-'))) {
@@ -248,6 +249,14 @@ final class PathGuard {
 
   static bool _samePath(String first, String second) =>
       _comparable(first) == _comparable(second);
+
+  static String _relativeSuffix(String root, String candidate) {
+    final offset = _hasTrailingSeparator(root) ? root.length : root.length + 1;
+    return candidate.substring(offset).replaceAll('\\', '/');
+  }
+
+  static bool _hasTrailingSeparator(String path) =>
+      path.endsWith('/') || path.endsWith('\\');
 
   static String _comparable(String path) {
     var value = Directory(path).absolute.path;

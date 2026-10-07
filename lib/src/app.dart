@@ -1,35 +1,63 @@
 import 'package:flutter/material.dart';
 
+import 'gallery_model.dart';
+import 'gallery_runtime.dart';
+import '../core/gallery_settings.dart';
 import 'home_shell.dart';
 
-class NexGalleryApp extends StatelessWidget {
-  const NexGalleryApp({super.key, this.platform});
+class NexGalleryApp extends StatefulWidget {
+  const NexGalleryApp({super.key, this.platform, this.model});
 
   static const _violet = Color(0xFF6D3BEF);
   final TargetPlatform? platform;
+  final GalleryModel? model;
 
   @override
-  Widget build(BuildContext context) {
+  State<NexGalleryApp> createState() => _NexGalleryAppState();
+}
+
+class _NexGalleryAppState extends State<NexGalleryApp> {
+  late final GalleryModel _model;
+  late final bool _ownsModel;
+  @override
+  void initState() {
+    super.initState();
+    _ownsModel = widget.model == null;
+    _model = widget.model ?? NexGalleryRuntime(platform: widget.platform);
+  }
+  @override
+  void dispose() {
+    if (_ownsModel) (_model as NexGalleryRuntime).dispose();
+    super.dispose();
+  }
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _model,
+    builder: (context, _) {
     return MaterialApp(
       title: 'nexGallery',
       debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.system,
+      themeMode: switch (_model.settings.appearance) {
+        GalleryAppearance.system => ThemeMode.system,
+        GalleryAppearance.light => ThemeMode.light,
+        GalleryAppearance.dark => ThemeMode.dark,
+      },
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
-      home: const NexGalleryHome(),
+      home: NexGalleryHome(platform: widget.platform, model: _model),
     );
-  }
+  });
 
   ThemeData _theme(Brightness brightness) {
     final scheme = ColorScheme.fromSeed(
-      seedColor: _violet,
+      seedColor: NexGalleryApp._violet,
       brightness: brightness,
     );
     final isDark = brightness == Brightness.dark;
 
     return ThemeData(
       brightness: brightness,
-      platform: platform,
+      platform: widget.platform,
       colorScheme: scheme,
       useMaterial3: true,
       scaffoldBackgroundColor: isDark

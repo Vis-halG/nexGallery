@@ -1,0 +1,359 @@
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+
+import '../../core/media_item.dart';
+import '../../src/gallery_model.dart';
+
+enum MediaTileAction {
+  open,
+  favorite,
+  addToAlbum,
+  archive,
+  trash,
+  restore,
+  delete,
+}
+
+class MediaTile extends StatelessWidget {
+  const MediaTile({
+    required this.item,
+    required this.model,
+    required this.onAction,
+    super.key,
+  });
+
+  final MediaItem item;
+  final GalleryModel model;
+  final ValueChanged<MediaTileAction> onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label:
+          '${item.name}, ${_kindLabel(item.kind)}'
+          '${item.isAvailable ? '' : ', drive unavailable'}',
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => onAction(MediaTileAction.open),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              MediaThumbnail(item: item, model: model),
+              Positioned(
+                top: 6,
+                left: 6,
+                child: _SourceBadge(source: item.source),
+              ),
+              Positioned(
+                top: 2,
+                right: 2,
+                child: PopupMenuButton<MediaTileAction>(
+                  tooltip: 'Actions for ${item.name}',
+                  onSelected: onAction,
+                  itemBuilder: (context) => _actions(item)
+                      .map(
+                        (entry) => PopupMenuItem<MediaTileAction>(
+                          value: entry.$1,
+                          enabled:
+                              item.isAvailable ||
+                              entry.$1 == MediaTileAction.open ||
+                              entry.$1 == MediaTileAction.favorite ||
+                              entry.$1 == MediaTileAction.addToAlbum ||
+                              entry.$1 == MediaTileAction.archive,
+                          child: Row(
+                            children: [
+                              Icon(entry.$2, size: 20),
+                              const SizedBox(width: 12),
+                              Text(entry.$3),
+                            ],
+                          ),
+                        ),
+                      )
+                      .toList(growable: false),
+                  icon: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: scheme.scrim.withValues(alpha: 0.54),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.all(5),
+                      child: Icon(Icons.more_vert_rounded, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(10, 24, 10, 8),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: 0.76),
+                      ],
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item.isAvailable ? item.name : 'Drive unavailable',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      if (item.isFavorite) ...[
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.favorite_rounded,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ],
+                      if (item.kind == MediaKind.video) ...[
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.play_circle_fill_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static List<(MediaTileAction, IconData, String)> _actions(MediaItem item) {
+    if (item.section == MediaSection.trash) {
+      return const [
+        (MediaTileAction.open, Icons.open_in_new_rounded, 'Open'),
+        (MediaTileAction.restore, Icons.restore_rounded, 'Restore'),
+        (
+          MediaTileAction.delete,
+          Icons.delete_forever_rounded,
+          'Delete forever',
+        ),
+      ];
+    }
+    return [
+      const (MediaTileAction.open, Icons.open_in_new_rounded, 'Open'),
+      (
+        MediaTileAction.favorite,
+        item.isFavorite ? Icons.heart_broken_rounded : Icons.favorite_rounded,
+        item.isFavorite ? 'Remove favorite' : 'Favorite',
+      ),
+      const (
+        MediaTileAction.addToAlbum,
+        Icons.playlist_add_rounded,
+        'Add to album',
+      ),
+      const (MediaTileAction.archive, Icons.archive_rounded, 'Archive'),
+      const (
+        MediaTileAction.trash,
+        Icons.delete_outline_rounded,
+        'Move to Trash',
+      ),
+    ];
+  }
+}
+
+class MediaThumbnail extends StatefulWidget {
+  const MediaThumbnail({
+    required this.item,
+    required this.model,
+    this.fit = BoxFit.cover,
+    this.size = 384,
+    this.showFailureMessage = false,
+    super.key,
+  });
+
+  final MediaItem item;
+  final GalleryModel model;
+  final BoxFit fit;
+  final int size;
+  final bool showFailureMessage;
+
+  @override
+  State<MediaThumbnail> createState() => _MediaThumbnailState();
+}
+
+class _MediaThumbnailState extends State<MediaThumbnail> {
+  late Future<Uint8List?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant MediaThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id ||
+        oldWidget.item.uri != widget.item.uri ||
+        oldWidget.item.metadata.modifiedAt != widget.item.metadata.modifiedAt ||
+        oldWidget.item.isAvailable != widget.item.isAvailable ||
+        oldWidget.size != widget.size ||
+        oldWidget.model != widget.model) {
+      _future = _load();
+    }
+  }
+
+  Future<Uint8List?> _load() => widget.item.isAvailable
+      ? widget.model.loadThumbnail(widget.item, size: widget.size)
+      : Future<Uint8List?>.value();
+
+  Widget _placeholder() => _MediaPlaceholder(
+    kind: widget.item.kind,
+    message: !widget.item.isAvailable
+        ? 'Drive unavailable'
+        : widget.showFailureMessage
+        ? 'Preview unavailable. Try opening with another app.'
+        : null,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes != null && bytes.isNotEmpty) {
+          return Image.memory(
+            bytes,
+            fit: widget.fit,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.low,
+            errorBuilder: (_, _, _) => _placeholder(),
+          );
+        }
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return ColoredBox(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: const Center(
+              child: SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+        return _placeholder();
+      },
+    );
+  }
+}
+
+class _MediaPlaceholder extends StatelessWidget {
+  const _MediaPlaceholder({required this.kind, this.message});
+
+  final MediaKind kind;
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.surfaceContainerHighest,
+      child: Center(
+        child: LayoutBuilder(
+          builder: (context, constraints) => Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(_kindIcon(kind), size: 42, color: scheme.onSurfaceVariant),
+                if (message != null && constraints.maxHeight >= 180) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    message!,
+                    textAlign: TextAlign.center,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SourceBadge extends StatelessWidget {
+  const _SourceBadge({required this.source});
+
+  final MediaSource source;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = source == MediaSource.phone ? 'Phone' : 'PC';
+    final icon = source == MediaSource.phone
+        ? Icons.smartphone_rounded
+        : Icons.computer_rounded;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: Colors.white),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _kindLabel(MediaKind kind) => switch (kind) {
+  MediaKind.image => 'photo',
+  MediaKind.video => 'video',
+  MediaKind.document => 'document',
+  MediaKind.audio => 'audio',
+  MediaKind.apk => 'APK',
+  MediaKind.archive => 'archive',
+  MediaKind.other => 'file',
+};
+
+IconData _kindIcon(MediaKind kind) => switch (kind) {
+  MediaKind.image => Icons.image_rounded,
+  MediaKind.video => Icons.movie_rounded,
+  MediaKind.document => Icons.description_rounded,
+  MediaKind.audio => Icons.audio_file_rounded,
+  MediaKind.apk => Icons.android_rounded,
+  MediaKind.archive => Icons.folder_zip_rounded,
+  MediaKind.other => Icons.insert_drive_file_rounded,
+};

@@ -57,8 +57,9 @@ class AndroidMediaPermissionStatus {
   final int sdkInt;
   final Map<AndroidMediaType, AndroidMediaPermission> statuses;
 
-  /// `full`, `partial`, or `denied`. `partial` is Android 14's selected-media
-  /// access and still allows a useful, user-controlled gallery.
+  /// `full`, `partial`, or `denied` for the requested visual collections.
+  /// `partial` includes Android 14 selected-media access and a grant for only
+  /// one of the requested image/video collections.
   final String visualAccess;
   final bool canOpenSettings;
 
@@ -322,6 +323,63 @@ class AndroidSafDirectory {
 }
 
 @immutable
+class AndroidPickedDocument {
+  const AndroidPickedDocument({
+    required this.status,
+    this.uri,
+    this.name,
+    this.mimeType,
+    this.sizeBytes,
+    this.persisted = false,
+  });
+
+  factory AndroidPickedDocument.fromMap(Map<Object?, Object?> value) {
+    final rawUri = value['uri'] as String?;
+    return AndroidPickedDocument(
+      status: value['status'] as String? ?? 'unknown',
+      uri: rawUri == null ? null : Uri.parse(rawUri),
+      name: value['name'] as String?,
+      mimeType: value['mimeType'] as String?,
+      sizeBytes: _integer(value['size']),
+      persisted: value['persisted'] as bool? ?? false,
+    );
+  }
+
+  /// `selected`, `cancelled`, or `unavailable`.
+  final String status;
+  final Uri? uri;
+  final String? name;
+  final String? mimeType;
+  final int? sizeBytes;
+  final bool persisted;
+}
+
+@immutable
+class AndroidCachedDocument {
+  const AndroidCachedDocument({
+    required this.path,
+    required this.name,
+    required this.mimeType,
+    required this.sizeBytes,
+  });
+
+  factory AndroidCachedDocument.fromMap(Map<Object?, Object?> value) {
+    return AndroidCachedDocument(
+      path: value['path'] as String,
+      name: value['name'] as String,
+      mimeType: value['mimeType'] as String? ?? 'application/octet-stream',
+      sizeBytes: _integer(value['size']) ?? 0,
+    );
+  }
+
+  /// Absolute path inside Android's app-private cache directory.
+  final String path;
+  final String name;
+  final String mimeType;
+  final int sizeBytes;
+}
+
+@immutable
 class AndroidDocumentItem {
   const AndroidDocumentItem({
     required this.uri,
@@ -430,15 +488,15 @@ class AndroidDocumentMutationResult {
 /// This bridge deliberately has no fallback on desktop. Check [isSupported]
 /// before invoking it when sharing a repository across Android and Windows.
 class AndroidMediaBridge {
-  AndroidMediaBridge._();
+  AndroidMediaBridge({MethodChannel? channel, this.platform})
+    : _channel = channel ?? const MethodChannel('com.thenex.nex_gallery/media');
 
-  static final AndroidMediaBridge instance = AndroidMediaBridge._();
-  static const MethodChannel _channel = MethodChannel(
-    'com.thenex.nex_gallery/media',
-  );
+  static final AndroidMediaBridge instance = AndroidMediaBridge();
+  final MethodChannel _channel;
+  final TargetPlatform? platform;
 
   bool get isSupported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      !kIsWeb && (platform ?? defaultTargetPlatform) == TargetPlatform.android;
 
   Future<AndroidMediaPermissionStatus> getPermissionStatus({
     Set<AndroidMediaType> mediaTypes = const <AndroidMediaType>{
@@ -477,11 +535,18 @@ class AndroidMediaBridge {
     AndroidMediaSort sortBy = AndroidMediaSort.dateAdded,
     bool descending = true,
   }) async {
+    // Audio has no DATE_TAKEN column. Treat the gallery-wide "recent" sort as
+    // DATE_ADDED for audio so a combined image/video/audio scan remains valid.
+    final effectiveSort =
+        mediaType == AndroidMediaType.audio &&
+            sortBy == AndroidMediaSort.dateTaken
+        ? AndroidMediaSort.dateAdded
+        : sortBy;
     final value = await _invokeMap('queryMedia', <String, Object>{
       'mediaType': mediaType.wireName,
       'limit': limit,
       'offset': offset,
-      'sortBy': sortBy.name,
+      'sortBy': effectiveSort.name,
       'descending': descending,
     });
     return AndroidMediaPage.fromMap(value);
@@ -545,6 +610,33 @@ class AndroidMediaBridge {
     return AndroidIntentResult.fromMap(value);
   }
 
+  /// Opens an app-private file with Android's selected viewer. Native code
+  /// rejects paths outside this app's files and cache directories.
+  Future<AndroidIntentResult> openAppFile(
+    String path, {
+    String? mimeType,
+  }) async {
+    final value = await _invokeMap('openAppFile', <String, Object?>{
+      'path': path,
+      'mimeType': mimeType,
+    });
+    return AndroidIntentResult.fromMap(value);
+  }
+
+  /// Shares one app-private file through a read-only FileProvider URI.
+  Future<AndroidIntentResult> shareAppFile(
+    String path, {
+    String? mimeType,
+    String chooserTitle = 'Share file',
+  }) async {
+    final value = await _invokeMap('shareAppFile', <String, Object?>{
+      'path': path,
+      'mimeType': mimeType,
+      'chooserTitle': chooserTitle,
+    });
+    return AndroidIntentResult.fromMap(value);
+  }
+
   Future<AndroidStorageStats> getStorageStats() async {
     final value = await _invokeMap('getStorageStats');
     return AndroidStorageStats.fromMap(value);
@@ -566,6 +658,22 @@ class AndroidMediaBridge {
   Future<AndroidSafDirectory> pickDirectory() async {
     final value = await _invokeMap('pickDirectory');
     return AndroidSafDirectory.fromMap(value);
+  }
+
+  /// Lets the user choose one readable document without broad storage access.
+  /// Android retains the read grant when the selected provider supports it.
+  Future<AndroidPickedDocument> pickDocument() async {
+    final value = await _invokeMap('pickDocument');
+    return AndroidPickedDocument.fromMap(value);
+  }
+
+  /// Streams a selected content URI into app-private cache for a resumable PC
+  /// upload. The returned cache file may be evicted by Android after use.
+  Future<AndroidCachedDocument> copyDocumentToAppCache(Uri uri) async {
+    final value = await _invokeMap('copyDocumentToAppCache', <String, Object>{
+      'uri': uri.toString(),
+    });
+    return AndroidCachedDocument.fromMap(value);
   }
 
   /// Returns folder grants retained by Android across app restarts.
