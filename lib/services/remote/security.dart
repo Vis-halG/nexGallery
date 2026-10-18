@@ -5,6 +5,21 @@ import 'dart:math';
 
 import 'sha256.dart';
 
+/// What a paired device may do. Writes also need the PC-wide write switch.
+abstract final class DeviceScope {
+  static const browse = 'browse';
+  static const download = 'download';
+  static const upload = 'upload';
+  static const organize = 'organize';
+  static const trash = 'trash';
+  static const all = <String>{browse, download, upload, organize, trash};
+  static const readOnly = <String>{browse, download};
+
+  static Set<String> parse(Object? value) => value is List
+      ? value.whereType<String>().where(all.contains).toSet()
+      : <String>{...all};
+}
+
 final class DeviceIdentity {
   const DeviceIdentity({
     required this.id,
@@ -12,6 +27,10 @@ final class DeviceIdentity {
     required this.tokenId,
     required this.createdAt,
     this.lastUsedAt,
+    this.scopes = DeviceScope.all,
+    this.roots,
+    this.publicKey,
+    this.lastAddress,
   });
 
   final String id;
@@ -19,6 +38,35 @@ final class DeviceIdentity {
   final String tokenId;
   final DateTime createdAt;
   final DateTime? lastUsedAt;
+  final Set<String> scopes;
+
+  /// Allowed root ids, or null for every shared folder.
+  final List<String>? roots;
+
+  /// Ed25519 key that must sign every request, when the device has one.
+  final String? publicKey;
+  final String? lastAddress;
+
+  /// Reads the owner-API form produced by [toPublicJson].
+  factory DeviceIdentity.fromPublicJson(Map<String, dynamic> json) =>
+      DeviceIdentity(
+        id: json['deviceId'] as String,
+        name: json['deviceName'] as String,
+        tokenId: json['tokenId'] as String,
+        createdAt: DateTime.parse(json['createdAt'] as String),
+        lastUsedAt: json['lastUsedAt'] == null
+            ? null
+            : DateTime.parse(json['lastUsedAt'] as String),
+        scopes: DeviceScope.parse(json['scopes']),
+        roots: json['roots'] is List
+            ? List.unmodifiable((json['roots'] as List).whereType<String>())
+            : null,
+        publicKey: json['signedRequests'] == true ? 'registered' : null,
+        lastAddress: json['lastAddress'] as String?,
+      );
+
+  bool allows(String scope) => scopes.contains(scope);
+  bool canUseRoot(String rootId) => roots == null || roots!.contains(rootId);
 
   Map<String, Object?> toPublicJson() => <String, Object?>{
     'deviceId': id,
@@ -26,6 +74,10 @@ final class DeviceIdentity {
     'tokenId': tokenId,
     'createdAt': createdAt.toUtc().toIso8601String(),
     if (lastUsedAt != null) 'lastUsedAt': lastUsedAt!.toUtc().toIso8601String(),
+    'scopes': (scopes.toList()..sort()),
+    'roots': ?roots,
+    'signedRequests': publicKey != null,
+    'lastAddress': ?lastAddress,
   };
 }
 
@@ -64,7 +116,12 @@ final class DeviceTokenStore {
       );
   }
 
-  Future<IssuedToken> issue(String requestedName) => _serialize(() async {
+  Future<IssuedToken> issue(
+    String requestedName, {
+    Set<String> scopes = DeviceScope.all,
+    List<String>? roots,
+    String? publicKey,
+  }) => _serialize(() async {
     final name = _cleanDeviceName(requestedName);
     final rawToken = _randomText(32);
     final salt = _randomText(18);
@@ -77,13 +134,19 @@ final class DeviceTokenStore {
       hash: sha256Hex(utf8.encode('$salt:$rawToken')),
       createdAt: now,
       lastUsedAt: null,
+      scopes: scopes.where(DeviceScope.all.contains).toSet(),
+      roots: roots == null ? null : List.unmodifiable(roots),
+      publicKey: publicKey,
     );
     _tokens.add(stored);
     await _save();
     return IssuedToken(token: rawToken, identity: stored.identity);
   });
 
-  Future<DeviceIdentity?> authenticate(String rawToken) async {
+  Future<DeviceIdentity?> authenticate(
+    String rawToken, {
+    String? remoteAddress,
+  }) async {
     if (rawToken.length < 20 || rawToken.length > 256) {
       return null;
     }
@@ -101,9 +164,11 @@ final class DeviceTokenStore {
     final now = DateTime.now().toUtc();
     // Limit disk writes while still keeping useful activity metadata.
     if (current.lastUsedAt == null ||
-        now.difference(current.lastUsedAt!).inMinutes >= 10) {
+        now.difference(current.lastUsedAt!).inMinutes >= 10 ||
+        (remoteAddress != null && remoteAddress != current.lastAddress)) {
       await _serialize(() async {
         current.lastUsedAt = now;
+        current.lastAddress = remoteAddress ?? current.lastAddress;
         await _save();
       });
     }
@@ -123,10 +188,26 @@ final class DeviceTokenStore {
     return true;
   });
 
+  /// Changes what a paired device may do. Returns false for unknown tokens.
+  Future<bool> updatePermissions(
+    String tokenId, {
+    required Set<String> scopes,
+    List<String>? roots,
+  }) => _serialize(() async {
+    for (final token in _tokens) {
+      if (token.tokenId != tokenId) continue;
+      token.scopes = scopes.where(DeviceScope.all.contains).toSet();
+      token.roots = roots == null ? null : List.unmodifiable(roots);
+      await _save();
+      return true;
+    }
+    return false;
+  });
+
   Future<void> _save() async {
     final temporary = File('${file.path}.tmp');
     final data = <String, Object?>{
-      'version': 1,
+      'version': 2,
       'tokens': _tokens.map((token) => token.toJson()).toList(),
     };
     await temporary.writeAsString(jsonEncode(data), flush: true);
@@ -171,8 +252,13 @@ final class _StoredToken {
     required this.hash,
     required this.createdAt,
     required this.lastUsedAt,
+    required this.scopes,
+    this.roots,
+    this.publicKey,
+    this.lastAddress,
   });
 
+  /// Version 1 tokens predate scopes; they keep full access as before.
   factory _StoredToken.fromJson(Map<String, dynamic> json) => _StoredToken(
     deviceId: json['deviceId'] as String,
     deviceName: json['deviceName'] as String,
@@ -183,6 +269,12 @@ final class _StoredToken {
     lastUsedAt: json['lastUsedAt'] == null
         ? null
         : DateTime.parse(json['lastUsedAt'] as String).toUtc(),
+    scopes: DeviceScope.parse(json['scopes']),
+    roots: json['roots'] is List
+        ? List.unmodifiable((json['roots'] as List).whereType<String>())
+        : null,
+    publicKey: json['publicKey'] as String?,
+    lastAddress: json['lastAddress'] as String?,
   );
 
   final String deviceId;
@@ -192,6 +284,10 @@ final class _StoredToken {
   final String hash;
   final DateTime createdAt;
   DateTime? lastUsedAt;
+  Set<String> scopes;
+  List<String>? roots;
+  final String? publicKey;
+  String? lastAddress;
 
   DeviceIdentity get identity => DeviceIdentity(
     id: deviceId,
@@ -199,6 +295,10 @@ final class _StoredToken {
     tokenId: tokenId,
     createdAt: createdAt,
     lastUsedAt: lastUsedAt,
+    scopes: Set.unmodifiable(scopes),
+    roots: roots,
+    publicKey: publicKey,
+    lastAddress: lastAddress,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -209,6 +309,10 @@ final class _StoredToken {
     'hash': hash,
     'createdAt': createdAt.toIso8601String(),
     if (lastUsedAt != null) 'lastUsedAt': lastUsedAt!.toIso8601String(),
+    'scopes': scopes.toList()..sort(),
+    'roots': ?roots,
+    'publicKey': ?publicKey,
+    'lastAddress': ?lastAddress,
   };
 }
 
@@ -250,6 +354,38 @@ final class AuditLog {
           );
         });
     return _queue;
+  }
+
+  /// The newest [limit] entries, newest first. Reads at most the last 512 KB.
+  Future<List<Map<String, Object?>>> tail({int limit = 200}) async {
+    await _queue.catchError((_) {});
+    if (!await file.exists()) return const [];
+    final handle = await file.open();
+    try {
+      final length = await handle.length();
+      final start = length > 512 * 1024 ? length - 512 * 1024 : 0;
+      await handle.setPosition(start);
+      final text = utf8.decode(
+        await handle.read(length - start),
+        allowMalformed: true,
+      );
+      final lines = text.split('\n');
+      if (start > 0 && lines.isNotEmpty) lines.removeAt(0);
+      final entries = <Map<String, Object?>>[];
+      for (final line in lines.reversed) {
+        if (line.trim().isEmpty) continue;
+        try {
+          final value = jsonDecode(line);
+          if (value is Map<String, dynamic>) entries.add(value);
+        } on FormatException {
+          continue;
+        }
+        if (entries.length >= limit) break;
+      }
+      return entries;
+    } finally {
+      await handle.close();
+    }
   }
 }
 

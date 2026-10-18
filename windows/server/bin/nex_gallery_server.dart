@@ -2,11 +2,23 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:nex_gallery/services/remote/agent_runner.dart';
 import 'package:nex_gallery/services/remote/nex_gallery_server.dart';
+import 'package:nex_gallery/services/remote/security.dart';
 
 Future<void> main(List<String> arguments) async {
   if (arguments.contains('--help') || arguments.contains('-h')) {
     _usage();
+    return;
+  }
+  final configIndex = arguments.indexOf('--config');
+  if (configIndex >= 0) {
+    if (configIndex + 1 >= arguments.length) {
+      stderr.writeln('--config requires a path.');
+      exitCode = 64;
+      return;
+    }
+    await _runAgent(File(arguments[configIndex + 1]).absolute);
     return;
   }
 
@@ -53,18 +65,43 @@ Future<void> main(List<String> arguments) async {
         'Loopback-only mode is active. Restart with --lan for trusted-LAN access.',
       );
     }
-    stdout.writeln('Press Ctrl+C to stop.');
+    stdout.writeln(
+      'Commands: approve ID [read|full], deny ID, code, devices, quit.',
+    );
 
     final stopped = Completer<void>();
-    late final StreamSubscription<ProcessSignal> interruptSubscription;
-    interruptSubscription = ProcessSignal.sigint.watch().listen((_) async {
-      if (!stopped.isCompleted) {
-        await server.stop();
-        stopped.complete();
+    Future<void> stop() async {
+      if (stopped.isCompleted) return;
+      stopped.complete();
+      await server.stop();
+    }
+
+    final announced = <String>{};
+    final events = server.events.listen((event) {
+      if (event != 'pairing') return;
+      for (final pending in server.pendingPairings) {
+        if (!announced.add(pending.requestId)) continue;
+        stdout.writeln(
+          'PAIRING REQUEST ${pending.requestId}: "${pending.deviceName}" from '
+          '${pending.remoteAddress}'
+          '${pending.publicKey == null ? '' : ' (signed requests)'}. '
+          'Type "approve ${pending.requestId}" or "deny ${pending.requestId}".',
+        );
       }
     });
+    final commands = stdin
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen(
+          (line) => unawaited(_command(server, line.trim(), stop)),
+          // A closed console keeps the server running until Ctrl+C.
+          onError: (Object _) {},
+        );
+    final interrupt = ProcessSignal.sigint.watch().listen((_) => stop());
     await stopped.future;
-    await interruptSubscription.cancel();
+    await interrupt.cancel();
+    await commands.cancel();
+    await events.cancel();
   } on FormatException catch (error) {
     stderr.writeln('Configuration error: ${error.message}');
     _usage();
@@ -75,6 +112,63 @@ Future<void> main(List<String> arguments) async {
   } on SocketException catch (error) {
     stderr.writeln('Could not start server: ${error.message}');
     exitCode = 69;
+  }
+}
+
+/// Background mode started by the desktop app or at Windows sign-in. It has
+/// no console, so everything goes to `agent.log` beside the configuration.
+Future<void> _runAgent(File config) async {
+  final runner = AgentRunner(config);
+  final code = await runZonedGuarded(runner.run, (error, stackTrace) {
+    runner.log.write('Unhandled agent error: $error\n$stackTrace');
+  });
+  await runner.log.flush();
+  exit(code ?? 70);
+}
+
+Future<void> _command(
+  NexGalleryServer server,
+  String line,
+  Future<void> Function() stop,
+) async {
+  final words = line.split(RegExp(r'\s+'));
+  try {
+    switch (words.first) {
+      case 'approve' when words.length >= 2:
+        final scopes = words.length > 2 && words[2] == 'full'
+            ? DeviceScope.all
+            : DeviceScope.readOnly;
+        final device = await server.approvePairing(words[1], scopes: scopes);
+        stdout.writeln('APPROVED ${device.name} (${scopes.join(', ')}).');
+      case 'deny' when words.length >= 2:
+        final denied = await server.denyPairing(words[1]);
+        stdout.writeln(denied ? 'DENIED ${words[1]}.' : 'No such request.');
+      case 'code':
+        final code = server.createPairingCode();
+        stdout.writeln(
+          'Pairing code: ${code.code} (expires ${code.expiresAt.toLocal()})',
+        );
+      case 'devices':
+        final devices = server.devices;
+        if (devices.isEmpty) stdout.writeln('No paired phones.');
+        for (final device in devices) {
+          stdout.writeln(
+            '${device.tokenId}  ${device.name}  ${device.scopes.join(',')}',
+          );
+        }
+      case 'quit' || 'exit':
+        await stop();
+      case '':
+        break;
+      default:
+        stdout.writeln(
+          'Commands: approve ID [read|full], deny ID, code, devices, quit.',
+        );
+    }
+  } on Object catch (error) {
+    stdout.writeln(
+      'Error: ${error.toString().replaceFirst('Bad state: ', '')}',
+    );
   }
 }
 
@@ -101,6 +195,7 @@ void _usage() {
 Usage:
   dart run windows/server/bin/nex_gallery_server.dart \\
     --root photos=D:\\Photos --root documents=D:\\Documents [options]
+  nexgallery_server.exe --config %LOCALAPPDATA%\\nexGallery\\server\\agent.json
 
 Required:
   --root ID=PATH      Allow one folder. Repeat for more folders.
@@ -109,9 +204,15 @@ Options:
   --port NUMBER       Listening port (default: 8732; 0 selects a free port).
   --data-dir PATH     Token and audit storage directory.
   --lan               Bind to the private LAN. Default is loopback only.
+  --config PATH       Run as the background agent configured by the desktop
+                      app (TLS, owner API, Tailscale binding, agent.log).
   --help              Show this help.
 
-This server does not provide TLS and must not be exposed by public port forwarding.
+New phones wait for approval: type "approve ID" (read-only) or
+"approve ID full" in this console.
+
+This console mode does not provide TLS and must not be exposed by public port
+forwarding. The desktop app and --config mode use TLS.
 ''');
 }
 

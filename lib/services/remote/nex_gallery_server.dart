@@ -4,8 +4,15 @@ import 'dart:io';
 import 'dart:math';
 
 import 'path_guard.dart';
+import 'power.dart';
+import 'request_signing.dart';
 import 'security.dart';
 import 'sha256.dart';
+import 'thumbnails.dart';
+import 'upload_quarantine.dart';
+import 'video_proxy.dart';
+
+void _stderrLog(String message) => stderr.writeln(message);
 
 final class RemoteServerConfig {
   const RemoteServerConfig({
@@ -13,6 +20,14 @@ final class RemoteServerConfig {
     required this.dataDirectory,
     this.port = 8732,
     this.listenOnLan = false,
+    this.bindAddresses,
+    this.securityContext,
+    this.certificateFingerprint,
+    this.allowWrites = false,
+    this.requireApproval = true,
+    this.serverName,
+    this.ownerSecret,
+    this.discoveryPort = 8733,
     this.maxJsonBytes = 1024 * 1024,
     this.maxUploadChunkBytes = 8 * 1024 * 1024,
     this.maxUploadFileBytes = 20 * 1024 * 1024 * 1024,
@@ -20,12 +35,38 @@ final class RemoteServerConfig {
     this.requestsPerMinute = 240,
     this.pairAttemptsPerMinute = 10,
     this.pairingLifetime = const Duration(minutes: 5),
+    this.keepAwake = false,
+    this.powerRequest,
+    this.uploadScanner,
+    this.videoTranscoder,
+    this.log = _stderrLog,
   });
 
   final Map<String, String> allowedRoots;
   final Directory dataDirectory;
   final int port;
   final bool listenOnLan;
+
+  /// Explicit interfaces, for example loopback plus a Tailscale address.
+  /// Overrides [listenOnLan] when set.
+  final List<InternetAddress>? bindAddresses;
+  final SecurityContext? securityContext;
+
+  /// Shown to phones that discover this PC on the local network so the user
+  /// can compare it with the PC screen.
+  final String? certificateFingerprint;
+  final bool allowWrites;
+
+  /// New phones wait until the PC owner approves them.
+  final bool requireApproval;
+  final String? serverName;
+
+  /// When set, owner endpoints also require this value in `X-Nex-Owner`.
+  /// A background agent stores it in its private data folder.
+  final String? ownerSecret;
+
+  /// UDP port answering LAN discovery; 0 disables discovery.
+  final int discoveryPort;
   final int maxJsonBytes;
   final int maxUploadChunkBytes;
   final int maxUploadFileBytes;
@@ -33,7 +74,114 @@ final class RemoteServerConfig {
   final int requestsPerMinute;
   final int pairAttemptsPerMinute;
   final Duration pairingLifetime;
+
+  /// Receives diagnostics. A background agent without a console writes them
+  /// to its log file.
+  final void Function(String message) log;
+
+  /// "Keep PC available": stop Windows sleeping while the server runs.
+  /// Streams and transfers keep it awake either way.
+  final bool keepAwake;
+
+  /// Replaces the platform power request, for tests.
+  final PowerRequest? powerRequest;
+
+  /// Checks executables, scripts, archives and macro documents before they
+  /// appear in a shared folder. Null finds Microsoft Defender; without a
+  /// scanner such uploads wait for the owner.
+  final UploadScanner? uploadScanner;
+
+  /// Makes 360p-1080p copies of videos for slow connections. Null looks for
+  /// FFmpeg on this PC; without it phones stream originals only.
+  final VideoTranscoder? videoTranscoder;
+
+  List<InternetAddress> get addresses =>
+      bindAddresses ??
+      [listenOnLan ? InternetAddress.anyIPv4 : InternetAddress.loopbackIPv4];
 }
+
+/// A phone waiting for the PC owner's approval.
+final class PendingPairing {
+  PendingPairing._({
+    required this.requestId,
+    required this.deviceName,
+    required this.remoteAddress,
+    required this.createdAt,
+    required this.expiresAt,
+    required this.publicKey,
+    required this._pollSecretHash,
+  });
+
+  final String requestId;
+  final String deviceName;
+  final String remoteAddress;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+  final String? publicKey;
+  final String _pollSecretHash;
+  String status = 'pending';
+  IssuedToken? _issued;
+
+  PairingRequest get request => PairingRequest(
+    requestId: requestId,
+    deviceName: deviceName,
+    remoteAddress: remoteAddress,
+    signedRequests: publicKey != null,
+  );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'requestId': requestId,
+    'deviceName': deviceName,
+    'remoteAddress': remoteAddress,
+    'createdAt': createdAt.toIso8601String(),
+    'expiresAt': expiresAt.toIso8601String(),
+    'signedRequests': publicKey != null,
+    'status': status,
+  };
+}
+
+/// What an owner UI shows about a phone waiting for approval.
+final class PairingRequest {
+  const PairingRequest({
+    required this.requestId,
+    required this.deviceName,
+    required this.remoteAddress,
+    required this.signedRequests,
+  });
+
+  factory PairingRequest.fromJson(Map<String, dynamic> json) => PairingRequest(
+    requestId: json['requestId'] as String,
+    deviceName: json['deviceName'] as String,
+    remoteAddress: json['remoteAddress'] as String? ?? '',
+    signedRequests: json['signedRequests'] == true,
+  );
+
+  final String requestId;
+  final String deviceName;
+  final String remoteAddress;
+  final bool signedRequests;
+}
+
+const _routeScopes = <String, String>{
+  'GET /v1/roots': DeviceScope.browse,
+  'GET /v1/info': DeviceScope.browse,
+  'GET /v1/list': DeviceScope.browse,
+  'GET /v1/search': DeviceScope.browse,
+  'GET /v1/thumbnail': DeviceScope.browse,
+  'GET /v1/download': DeviceScope.download,
+  'HEAD /v1/download': DeviceScope.download,
+  'GET /v1/proxy/status': DeviceScope.download,
+  'GET /v1/proxy': DeviceScope.download,
+  'HEAD /v1/proxy': DeviceScope.download,
+  'PUT /v1/upload': DeviceScope.upload,
+  'POST /v1/folders': DeviceScope.organize,
+  'POST /v1/move': DeviceScope.organize,
+  'POST /v1/trash': DeviceScope.trash,
+  'GET /v1/trash': DeviceScope.trash,
+  'POST /v1/trash/restore': DeviceScope.trash,
+};
+
+const discoveryRequest = 'NEXGALLERY_DISCOVER_V1';
 
 final class PairingCode {
   const PairingCode({required this.code, required this.expiresAt});
@@ -59,6 +207,9 @@ final class NexGalleryServer {
     required this._pathGuard,
     required this._tokenStore,
     required this._auditLog,
+    required this._thumbnails,
+    required this._scanner,
+    required this._transcoder,
   }) : _requestLimiter = FixedWindowRateLimiter(
          limit: config.requestsPerMinute,
          window: const Duration(minutes: 1),
@@ -77,8 +228,34 @@ final class NexGalleryServer {
   final _KeyedLock _uploadLocks = _KeyedLock();
   final Random _random = Random.secure();
   final Map<String, DateTime> _pairingHashes = <String, DateTime>{};
+  final Map<String, PendingPairing> _pending = <String, PendingPairing>{};
+  final ThumbnailCache _thumbnails;
+  final UploadScanner? _scanner;
+  final VideoTranscoder? _transcoder;
+  late final VideoProxyCache? _proxies = switch (_transcoder) {
+    final transcoder? => VideoProxyCache(
+      Directory('${config.dataDirectory.path}${Platform.pathSeparator}proxies'),
+      transcoder,
+      keepAwake: _keptAwake,
+    ),
+    null => null,
+  };
+  Future<void> _scans = Future<void>.value();
+  final ReplayGuard _replay = ReplayGuard();
+  final _identities = Expando<DeviceIdentity>();
+  final _signed = Expando<bool>();
+  final _events = StreamController<String>.broadcast();
+  final List<HttpServer> _servers = <HttpServer>[];
+  final List<StreamSubscription<HttpRequest>> _subscriptions =
+      <StreamSubscription<HttpRequest>>[];
+  RawDatagramSocket? _discovery;
   HttpServer? _server;
-  StreamSubscription<HttpRequest>? _subscription;
+  AwakeTracker? _awake;
+  List<String>? _macAddresses;
+
+  /// Emits `pairing` when a phone asks to pair and `devices` when the set of
+  /// paired devices changes, so an owner UI can refresh.
+  Stream<String> get events => _events.stream;
 
   static Future<NexGalleryServer> create(RemoteServerConfig config) async {
     if (config.port < 0 || config.port > 65535) {
@@ -115,60 +292,280 @@ final class NexGalleryServer {
           '${config.dataDirectory.path}${Platform.pathSeparator}audit.jsonl',
         ),
       ),
+      thumbnails: ThumbnailCache(
+        Directory(
+          '${config.dataDirectory.path}${Platform.pathSeparator}thumbnails',
+        ),
+      ),
+      scanner: config.uploadScanner ?? await DefenderScanner.find(),
+      transcoder: config.videoTranscoder ?? await FfmpegTranscoder.find(),
     );
   }
 
   bool get isRunning => _server != null;
   int? get boundPort => _server?.port;
   InternetAddress? get boundAddress => _server?.address;
+  List<InternetAddress> get boundAddresses =>
+      _servers.map((server) => server.address).toList(growable: false);
+  String get serverName => config.serverName ?? Platform.localHostname;
 
   Future<void> start() async {
     if (_server != null) {
       throw StateError('Server is already running.');
     }
-    // LAN binding is opt-in because this implementation does not terminate TLS.
-    final address = config.listenOnLan
-        ? InternetAddress.anyIPv4
-        : InternetAddress.loopbackIPv4;
-    final server = await HttpServer.bind(address, config.port, shared: false);
-    _server = server;
-    _subscription = server.listen(
-      _handle,
-      onError: (Object error, StackTrace stackTrace) {
-        stderr.writeln('nexGallery server request error: $error');
-      },
-    );
+    // Explicit LAN or private-network opt-in remains required with TLS.
+    final addresses = config.addresses;
+    if (addresses.isEmpty) throw ArgumentError('No bind address was given.');
+    final context = config.securityContext;
+    var port = config.port;
     try {
+      for (final address in addresses) {
+        final server = context == null
+            ? await HttpServer.bind(address, port, shared: false)
+            : await HttpServer.bindSecure(
+                address,
+                port,
+                context,
+                shared: false,
+              );
+        port = server.port;
+        _servers.add(server);
+        _subscriptions.add(
+          server.listen(
+            _handle,
+            onError: (Object error, StackTrace stackTrace) {
+              config.log('nexGallery server request error: $error');
+            },
+          ),
+        );
+      }
+      _server = _servers.first;
+      _awake = AwakeTracker(
+        config.powerRequest ??
+            createPowerRequest('nexGallery is serving files to a paired phone'),
+        always: config.keepAwake,
+      );
+      if (config.discoveryPort > 0 &&
+          addresses.any((address) => !address.isLoopback)) {
+        await _startDiscovery();
+      }
       await _auditLog.record(
         action: 'server.start',
         outcome: 'success',
         details: <String, Object?>{
-          'bind': address.address,
-          'port': server.port,
+          'bind': addresses.map((address) => address.address).toList(),
+          'port': port,
           'lan': config.listenOnLan,
-          'tls': false,
+          'tls': config.securityContext != null,
+          'approval': config.requireApproval,
+          'uploadScanner': ?_scanner?.name,
         },
       );
+      unawaited(
+        _resumeScans().catchError((Object error) {
+          config.log('Could not resume upload scans: $error');
+        }),
+      );
     } catch (_) {
-      _server = null;
-      final subscription = _subscription;
-      _subscription = null;
-      await subscription?.cancel();
-      await server.close(force: true);
+      await _closeSockets(force: true);
       rethrow;
     }
   }
 
+  Future<void> _closeSockets({required bool force}) async {
+    _server = null;
+    for (final subscription in _subscriptions) {
+      await subscription.cancel();
+    }
+    _subscriptions.clear();
+    for (final server in _servers) {
+      await server.close(force: force);
+    }
+    _servers.clear();
+    _discovery?.close();
+    _discovery = null;
+    _awake?.dispose();
+    _awake = null;
+  }
+
+  /// Whether this PC is currently prevented from sleeping.
+  bool get keepsPcAwake => _awake?.isHeld ?? false;
+
+  Future<void> _keptAwake(Future<void> Function() action) {
+    final awake = _awake;
+    return awake == null ? action() : awake.during(action);
+  }
+
+  /// Answers LAN discovery broadcasts with this PC's name and port. The
+  /// certificate fingerprint lets the user compare it with the PC screen.
+  Future<void> _startDiscovery() async {
+    try {
+      final socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        config.discoveryPort,
+      );
+      _discovery = socket;
+      socket.listen((event) {
+        if (event != RawSocketEvent.read) return;
+        final datagram = socket.receive();
+        if (datagram == null || datagram.data.length > 64) return;
+        if (utf8.decode(datagram.data, allowMalformed: true).trim() !=
+            discoveryRequest) {
+          return;
+        }
+        final reply = utf8.encode(
+          jsonEncode(<String, Object?>{
+            'service': 'nexgallery',
+            'version': 1,
+            'name': serverName,
+            'port': boundPort,
+            'tls': config.securityContext != null,
+            'fingerprint': ?config.certificateFingerprint,
+          }),
+        );
+        socket.send(reply, datagram.address, datagram.port);
+      });
+    } on SocketException catch (error) {
+      // Another nexGallery instance may own the port; pairing still works by
+      // QR code or typed address.
+      config.log('LAN discovery is unavailable: ${error.message}');
+    }
+  }
+
   Future<void> stop({bool force = false}) async {
-    final server = _server;
-    if (server == null) {
+    if (_server == null) {
       return;
     }
-    _server = null;
-    await _subscription?.cancel();
-    _subscription = null;
-    await server.close(force: force);
+    await _closeSockets(force: force);
     await _auditLog.record(action: 'server.stop', outcome: 'success');
+  }
+
+  /// Phones waiting for approval, oldest first.
+  List<PendingPairing> get pendingPairings {
+    _expirePending();
+    return _pending.values
+        .where((pending) => pending.status == 'pending')
+        .toList(growable: false);
+  }
+
+  List<DeviceIdentity> get devices => _tokenStore.list();
+
+  void _expirePending() {
+    final now = DateTime.now().toUtc();
+    _pending.removeWhere((_, pending) => !pending.expiresAt.isAfter(now));
+  }
+
+  /// Approves a waiting phone with the chosen permissions. The phone collects
+  /// its token on its next status poll.
+  Future<DeviceIdentity> approvePairing(
+    String requestId, {
+    Set<String> scopes = DeviceScope.readOnly,
+    List<String>? roots,
+  }) async {
+    _expirePending();
+    final pending = _pending[requestId];
+    if (pending == null || pending.status != 'pending') {
+      throw StateError(
+        'This pairing request expired. Ask the phone to try again.',
+      );
+    }
+    final unknown = roots?.where((root) => !_pathGuard.roots.containsKey(root));
+    if (unknown != null && unknown.isNotEmpty) {
+      throw ArgumentError('Unknown shared folder: ${unknown.first}');
+    }
+    final issued = await _tokenStore.issue(
+      pending.deviceName,
+      scopes: scopes,
+      roots: roots,
+      publicKey: pending.publicKey,
+    );
+    pending
+      ..status = 'approved'
+      .._issued = issued;
+    await _safeAudit(
+      action: 'pair.approve',
+      outcome: 'success',
+      identity: issued.identity,
+      remoteAddress: pending.remoteAddress,
+      details: <String, Object?>{'scopes': scopes.toList()},
+    );
+    _events.add('devices');
+    return issued.identity;
+  }
+
+  Future<bool> denyPairing(String requestId) async {
+    final pending = _pending[requestId];
+    if (pending == null || pending.status != 'pending') return false;
+    pending.status = 'denied';
+    await _safeAudit(
+      action: 'pair.deny',
+      outcome: 'success',
+      remoteAddress: pending.remoteAddress,
+    );
+    _events.add('pairing');
+    return true;
+  }
+
+  Future<bool> revokeDevice(String tokenId) async {
+    final revoked = await _tokenStore.revoke(tokenId);
+    if (revoked) {
+      await _safeAudit(
+        action: 'tokens.revoke',
+        outcome: 'success',
+        details: <String, Object?>{'revokedTokenId': tokenId, 'by': 'owner'},
+      );
+      _events.add('devices');
+    }
+    return revoked;
+  }
+
+  Future<bool> updateDevicePermissions(
+    String tokenId, {
+    required Set<String> scopes,
+    List<String>? roots,
+  }) async {
+    final updated = await _tokenStore.updatePermissions(
+      tokenId,
+      scopes: scopes,
+      roots: roots,
+    );
+    if (updated) {
+      await _safeAudit(
+        action: 'tokens.permissions',
+        outcome: 'success',
+        details: <String, Object?>{
+          'tokenId': tokenId,
+          'scopes': scopes.toList(),
+          'roots': ?roots,
+        },
+      );
+      _events.add('devices');
+    }
+    return updated;
+  }
+
+  /// The most recent audit entries, newest first.
+  Future<List<Map<String, Object?>>> readAudit({int limit = 200}) =>
+      _auditLog.tail(limit: limit);
+
+  Future<List<String>> _localMacAddresses() async {
+    final cached = _macAddresses;
+    if (cached != null) return cached;
+    final found = <String>[];
+    if (Platform.isWindows) {
+      try {
+        final result = await Process.run('getmac', ['/fo', 'csv', '/nh']);
+        for (final match in RegExp(
+          r'([0-9A-F]{2}(?:-[0-9A-F]{2}){5})',
+          caseSensitive: false,
+        ).allMatches('${result.stdout}')) {
+          found.add(match.group(1)!.replaceAll('-', ':').toUpperCase());
+        }
+      } on ProcessException {
+        // Wake-on-LAN details are optional.
+      }
+    }
+    return _macAddresses = found.toSet().toList(growable: false);
   }
 
   /// Creates a short-lived code suitable for displaying as text or encoding in
@@ -200,19 +597,14 @@ final class NexGalleryServer {
           'status': 'ok',
           'service': 'nexGallery PC server',
           'version': 1,
-          'tls': false,
+          'tls': config.securityContext != null,
+          'allowWrites': config.allowWrites,
           'lanEnabled': config.listenOnLan,
         });
         return;
       }
       if (request.uri.path == '/v1/pair/code' && request.method == 'POST') {
-        if (!_isLoopback(request.connectionInfo?.remoteAddress)) {
-          throw const _ApiException(
-            403,
-            'local_only',
-            'Pairing codes can only be created from this PC.',
-          );
-        }
+        _requireOwner(request);
         final code = createPairingCode();
         await _auditLog.record(
           action: 'pair.code.create',
@@ -233,18 +625,60 @@ final class NexGalleryServer {
         await _handlePair(request, remoteAddress);
         return;
       }
+      if (request.uri.path == '/v1/pair/status' && request.method == 'POST') {
+        await _handlePairStatus(request);
+        return;
+      }
+      if (await _handleOwner(request, route, remoteAddress)) return;
 
-      identity = await _authenticate(request);
+      identity = await _authenticate(request, remoteAddress);
+      _identities[request] = identity;
       if (!_requestLimiter.allow('${identity.id}:authenticated')) {
         throw const _ApiException(429, 'rate_limited', 'Too many requests.');
       }
+
+      if (request.method != 'GET' &&
+          request.method != 'HEAD' &&
+          request.uri.path != '/v1/tokens/revoke' &&
+          !config.allowWrites) {
+        throw const _ApiException(
+          403,
+          'read_only',
+          'The PC owner has enabled read-only access.',
+        );
+      }
+      final scope = _routeScopes[route];
+      if (scope != null && !identity.allows(scope)) {
+        throw _ApiException(
+          403,
+          'scope_denied',
+          'The PC owner has not allowed this phone to $scope.',
+          details: <String, Object?>{'scope': scope},
+        );
+      }
+      final queryRoot = request.uri.queryParameters['root'];
+      if (queryRoot != null) _checkRoot(identity, queryRoot);
 
       switch (route) {
         case 'GET /v1/roots':
           await _json(request.response, 200, <String, Object?>{
             'roots': _pathGuard.roots.values
+                .where((root) => identity!.canUseRoot(root.id))
                 .map((root) => root.toJson())
                 .toList(growable: false),
+          });
+        case 'GET /v1/info':
+          await _json(request.response, 200, <String, Object?>{
+            'name': serverName,
+            'version': 2,
+            'allowWrites': config.allowWrites,
+            'scopes': identity.scopes.toList()..sort(),
+            'roots': ?identity.roots,
+            'macAddresses': await _localMacAddresses(),
+            'videoProxy': <String, Object?>{
+              'available': _proxies != null,
+              'qualities': videoProxyQualities,
+            },
           });
         case 'GET /v1/list':
           await _handleList(request, identity);
@@ -252,15 +686,16 @@ final class NexGalleryServer {
           await _handleSearch(request, identity);
         case 'GET /v1/download':
         case 'HEAD /v1/download':
-          await _handleDownload(request, identity);
+          await _keptAwake(() => _handleDownload(request, identity!));
+        case 'GET /v1/proxy/status':
+          await _handleProxyStatus(request);
+        case 'GET /v1/proxy':
+        case 'HEAD /v1/proxy':
+          await _keptAwake(() => _handleProxy(request, identity!));
         case 'GET /v1/thumbnail':
-          throw const _ApiException(
-            501,
-            'thumbnail_not_supported',
-            'Thumbnail generation is not available in this server core.',
-          );
+          await _handleThumbnail(request, identity);
         case 'PUT /v1/upload':
-          await _handleUpload(request, identity);
+          await _keptAwake(() => _handleUpload(request, identity!));
         case 'POST /v1/folders':
           await _handleCreateFolder(request, identity);
         case 'POST /v1/move':
@@ -271,13 +706,6 @@ final class NexGalleryServer {
           await _handleTrashList(request, identity);
         case 'POST /v1/trash/restore':
           await _handleRestore(request, identity);
-        case 'GET /v1/tokens':
-          await _json(request.response, 200, <String, Object?>{
-            'devices': _tokenStore
-                .list()
-                .map((device) => device.toPublicJson())
-                .toList(growable: false),
-          });
         case 'POST /v1/tokens/revoke':
           await _handleRevoke(request, identity);
         default:
@@ -330,7 +758,7 @@ final class NexGalleryServer {
         ),
       );
     } catch (error, stackTrace) {
-      stderr.writeln('Unhandled request failure: $error\n$stackTrace');
+      config.log('Unhandled request failure: $error\n$stackTrace');
       await _safeAudit(
         action: route,
         outcome: 'failed',
@@ -345,10 +773,190 @@ final class NexGalleryServer {
     }
   }
 
+  void _requireOwner(HttpRequest request) {
+    if (!_isLoopback(request.connectionInfo?.remoteAddress)) {
+      throw const _ApiException(
+        403,
+        'local_only',
+        'Manage pairing and devices on the PC.',
+      );
+    }
+    final secret = config.ownerSecret;
+    if (secret != null &&
+        !constantTimeEquals(
+          request.headers.value('x-nex-owner') ?? '',
+          secret,
+        )) {
+      throw const _ApiException(
+        403,
+        'owner_required',
+        'Only the nexGallery app on this PC can manage the server.',
+      );
+    }
+  }
+
+  void _checkRoot(DeviceIdentity identity, String rootId) {
+    if (!identity.canUseRoot(rootId)) {
+      throw const _ApiException(
+        403,
+        'root_denied',
+        'This phone may not open that shared folder.',
+      );
+    }
+  }
+
+  /// Loopback owner API used by the desktop app to manage a background agent.
+  Future<bool> _handleOwner(
+    HttpRequest request,
+    String route,
+    String remoteAddress,
+  ) async {
+    switch (route) {
+      case 'GET /v1/pair/requests':
+        _requireOwner(request);
+        await _json(request.response, 200, <String, Object?>{
+          'requests': [for (final pending in pendingPairings) pending.toJson()],
+        });
+      case 'POST /v1/pair/approve':
+        _requireOwner(request);
+        final body = await _readJson(request);
+        final identity = await approvePairing(
+          _requiredString(body, 'requestId', maxLength: 64),
+          scopes: body['scopes'] == null
+              ? DeviceScope.readOnly
+              : DeviceScope.parse(body['scopes']),
+          roots: body['roots'] is List
+              ? (body['roots'] as List).whereType<String>().toList()
+              : null,
+        );
+        await _json(request.response, 200, identity.toPublicJson());
+      case 'POST /v1/pair/deny':
+        _requireOwner(request);
+        final body = await _readJson(request);
+        await _json(request.response, 200, <String, Object?>{
+          'denied': await denyPairing(
+            _requiredString(body, 'requestId', maxLength: 64),
+          ),
+        });
+      case 'GET /v1/tokens':
+        _requireOwner(request);
+        await _json(request.response, 200, <String, Object?>{
+          'devices': devices
+              .map((device) => device.toPublicJson())
+              .toList(growable: false),
+        });
+      case 'POST /v1/tokens/permissions':
+        _requireOwner(request);
+        final body = await _readJson(request);
+        final updated = await updateDevicePermissions(
+          _requiredString(body, 'tokenId', maxLength: 64),
+          scopes: DeviceScope.parse(body['scopes']),
+          roots: body['roots'] is List
+              ? (body['roots'] as List).whereType<String>().toList()
+              : null,
+        );
+        if (!updated) {
+          throw const _ApiException(
+            404,
+            'token_not_found',
+            'Token was not found.',
+          );
+        }
+        await _json(request.response, 200, <String, Object?>{'updated': true});
+      case 'POST /v1/owner/revoke':
+        _requireOwner(request);
+        final body = await _readJson(request);
+        await _json(request.response, 200, <String, Object?>{
+          'revoked': await revokeDevice(
+            _requiredString(body, 'tokenId', maxLength: 64),
+          ),
+        });
+      case 'POST /v1/owner/shutdown':
+        _requireOwner(request);
+        await _json(request.response, 202, <String, Object?>{'stopping': true});
+        // The agent process exits when it sees this event.
+        _events.add('shutdown');
+      case 'GET /v1/quarantine':
+        _requireOwner(request);
+        await _json(request.response, 200, <String, Object?>{
+          'scanner': ?_scanner?.name,
+          'uploads': [for (final item in await quarantined()) item.toJson()],
+        });
+      case 'POST /v1/quarantine/release':
+        _requireOwner(request);
+        final body = await _readJson(request);
+        await _json(request.response, 200, <String, Object?>{
+          'path': await releaseQuarantined(
+            _requiredString(body, 'root', maxLength: 40),
+            _requiredString(body, 'id', maxLength: 80),
+          ),
+        });
+      case 'POST /v1/quarantine/delete':
+        _requireOwner(request);
+        final body = await _readJson(request);
+        await deleteQuarantined(
+          _requiredString(body, 'root', maxLength: 40),
+          _requiredString(body, 'id', maxLength: 80),
+        );
+        await _json(request.response, 200, <String, Object?>{'deleted': true});
+      case 'GET /v1/audit':
+        _requireOwner(request);
+        final limit =
+            int.tryParse(request.uri.queryParameters['limit'] ?? '') ?? 200;
+        await _json(request.response, 200, <String, Object?>{
+          'entries': await readAudit(limit: limit.clamp(1, 1000)),
+        });
+      default:
+        return false;
+    }
+    return true;
+  }
+
+  Future<void> _handlePairStatus(HttpRequest request) async {
+    final body = await _readJson(request);
+    final requestId = _requiredString(body, 'requestId', maxLength: 64);
+    final secret = _requiredString(body, 'pollSecret', maxLength: 128);
+    _expirePending();
+    final pending = _pending[requestId];
+    if (pending == null ||
+        !constantTimeEquals(
+          sha256Hex(utf8.encode(secret)),
+          pending._pollSecretHash,
+        )) {
+      throw const _ApiException(
+        404,
+        'pairing_not_found',
+        'This pairing request expired. Start pairing again.',
+      );
+    }
+    final issued = pending._issued;
+    if (pending.status == 'approved' && issued != null) {
+      // The token is delivered exactly once.
+      _pending.remove(requestId);
+      await _json(request.response, 200, <String, Object?>{
+        'status': 'approved',
+        'token': issued.token,
+        'tokenType': 'Bearer',
+        'device': issued.identity.toPublicJson(),
+      });
+      return;
+    }
+    if (pending.status == 'denied') _pending.remove(requestId);
+    await _json(request.response, 200, <String, Object?>{
+      'status': pending.status,
+      'expiresAt': pending.expiresAt.toIso8601String(),
+    });
+  }
+
   Future<void> _handlePair(HttpRequest request, String remoteAddress) async {
     final body = await _readJson(request);
     final code = _requiredString(body, 'code', maxLength: 32);
     final deviceName = _requiredString(body, 'deviceName', maxLength: 80);
+    final publicKey = body['publicKey'];
+    if (publicKey != null &&
+        (publicKey is! String || !isValidPublicKey(publicKey))) {
+      throw const FormatException('publicKey must be a base64url Ed25519 key.');
+    }
     final digest = sha256Hex(utf8.encode(code));
     final expiresAt = _pairingHashes[digest];
     final now = DateTime.now().toUtc();
@@ -366,7 +974,46 @@ final class NexGalleryServer {
       );
     }
     _pairingHashes.remove(digest);
-    final issued = await _tokenStore.issue(deviceName);
+    if (config.requireApproval) {
+      _expirePending();
+      if (_pending.length >= 20) {
+        throw const _ApiException(
+          429,
+          'too_many_pending',
+          'Too many phones are waiting for approval.',
+        );
+      }
+      final requestId = _randomToken(12);
+      final pollSecret = _randomToken(24);
+      final pending = PendingPairing._(
+        requestId: requestId,
+        deviceName: deviceName.trim(),
+        remoteAddress: remoteAddress,
+        createdAt: now,
+        expiresAt: now.add(config.pairingLifetime),
+        publicKey: publicKey as String?,
+        pollSecretHash: sha256Hex(utf8.encode(pollSecret)),
+      );
+      _pending[requestId] = pending;
+      await _auditLog.record(
+        action: 'pair.request',
+        outcome: 'pending',
+        remoteAddress: remoteAddress,
+      );
+      _events.add('pairing');
+      await _json(request.response, 202, <String, Object?>{
+        'status': 'pending',
+        'requestId': requestId,
+        'pollSecret': pollSecret,
+        'expiresAt': pending.expiresAt.toIso8601String(),
+      });
+      return;
+    }
+    final issued = await _tokenStore.issue(
+      deviceName,
+      publicKey: publicKey as String?,
+    );
+    _events.add('devices');
     await _auditLog.record(
       action: 'pair.complete',
       outcome: 'success',
@@ -380,7 +1027,66 @@ final class NexGalleryServer {
     });
   }
 
-  Future<DeviceIdentity> _authenticate(HttpRequest request) async {
+  String _randomToken(int bytes) => base64Url
+      .encode(List<int>.generate(bytes, (_) => _random.nextInt(256)))
+      .replaceAll('=', '');
+
+  Future<DeviceIdentity> _authenticate(
+    HttpRequest request,
+    String remoteAddress,
+  ) async {
+    final identity = await _bearerIdentity(request, remoteAddress);
+    final publicKey = identity.publicKey;
+    if (publicKey == null) return identity;
+    // Devices that registered a key must sign every request.
+    final headers = request.headers;
+    final timestamp = headers.value(SignedHeaders.timestamp) ?? '';
+    final nonce = headers.value(SignedHeaders.nonce) ?? '';
+    final signature = headers.value(SignedHeaders.signature) ?? '';
+    if (headers.value(SignedHeaders.device) != identity.tokenId ||
+        signature.isEmpty) {
+      throw const _ApiException(
+        401,
+        'signature_required',
+        'This phone must sign its requests.',
+      );
+    }
+    final valid = await verifyDeviceSignature(
+      publicKey: publicKey,
+      signature: signature,
+      message: canonicalRequest(
+        method: request.method,
+        path: request.uri.path,
+        query: request.uri.query,
+        timestamp: timestamp,
+        nonce: nonce,
+        tokenId: identity.tokenId,
+        header: headers.value,
+      ),
+    );
+    if (!valid) {
+      throw const _ApiException(
+        401,
+        'invalid_signature',
+        'Signature is invalid.',
+      );
+    }
+    final replay = _replay.check(identity.tokenId, timestamp, nonce);
+    if (replay != null) {
+      throw _ApiException(
+        401,
+        replay,
+        'Request was rejected. Check that the phone clock is correct.',
+      );
+    }
+    _signed[request] = true;
+    return identity;
+  }
+
+  Future<DeviceIdentity> _bearerIdentity(
+    HttpRequest request,
+    String remoteAddress,
+  ) async {
     final authorization = request.headers.value(
       HttpHeaders.authorizationHeader,
     );
@@ -397,7 +1103,10 @@ final class NexGalleryServer {
         'A bearer token is required.',
       );
     }
-    final identity = await _tokenStore.authenticate(bearer.group(1)!.trim());
+    final identity = await _tokenStore.authenticate(
+      bearer.group(1)!.trim(),
+      remoteAddress: remoteAddress,
+    );
     if (identity == null) {
       throw const _ApiException(
         401,
@@ -420,12 +1129,37 @@ final class NexGalleryServer {
         'Path is not a directory.',
       );
     }
-    final entries = <Map<String, Object?>>[];
+    final offset = max(
+      0,
+      int.tryParse(request.uri.queryParameters['offset'] ?? '') ?? 0,
+    );
+    final limit =
+        (int.tryParse(request.uri.queryParameters['limit'] ?? '') ?? 5000)
+            .clamp(1, 5000);
+    // Names are listed first and sorted so pages are stable; metadata is read
+    // only for the requested page.
+    final children = <(String, FileSystemEntity)>[];
     await for (final entity in directory.list(followLinks: false)) {
       final name = _basename(entity.path);
-      if (_isHiddenServerEntry(name)) {
-        continue;
-      }
+      if (_isHiddenServerEntry(name)) continue;
+      children.add((name, entity));
+      if (children.length >= 100000) break;
+    }
+    final directories = <String>{
+      for (final (name, entity) in children)
+        if (entity is Directory) name,
+    };
+    children.sort((left, right) {
+      final typeOrder =
+          (directories.contains(left.$1) ? 0 : 1) -
+          (directories.contains(right.$1) ? 0 : 1);
+      if (typeOrder != 0) return typeOrder;
+      return left.$1.toLowerCase().compareTo(right.$1.toLowerCase());
+    });
+    final entries = <Map<String, Object?>>[];
+    var index = offset;
+    for (; index < children.length && entries.length < limit; index++) {
+      final (name, entity) = children[index];
       final childRelative = _combineRelative(relativePath, name);
       try {
         await _pathGuard.resolve(rootId, childRelative);
@@ -433,32 +1167,23 @@ final class NexGalleryServer {
       } on RemotePathException {
         // Links that resolve outside the configured root are intentionally hidden.
       }
-      if (entries.length >= 5000) {
-        break;
-      }
     }
-    entries.sort((left, right) {
-      final typeOrder =
-          (left['type'] == 'directory' ? 0 : 1) -
-          (right['type'] == 'directory' ? 0 : 1);
-      if (typeOrder != 0) return typeOrder;
-      return (left['name'] as String).toLowerCase().compareTo(
-        (right['name'] as String).toLowerCase(),
-      );
-    });
     await _safeAudit(
       action: 'files.list',
       outcome: 'success',
       identity: identity,
       rootId: rootId,
       relativePath: relativePath,
-      details: <String, Object?>{'count': entries.length},
+      details: <String, Object?>{'count': entries.length, 'offset': offset},
     );
     await _json(request.response, 200, <String, Object?>{
       'root': rootId,
       'path': _normalizedRelative(relativePath),
       'entries': entries,
-      'truncated': entries.length >= 5000,
+      'total': children.length,
+      'offset': offset,
+      if (index < children.length) 'nextOffset': index,
+      'truncated': index < children.length,
     });
   }
 
@@ -554,7 +1279,19 @@ final class NexGalleryServer {
     if (!await file.exists()) {
       throw const _ApiException(400, 'not_a_file', 'Path is not a file.');
     }
-    final length = await file.length();
+    final stat = await file.stat();
+    final length = stat.size;
+    final version = _version(stat);
+    final expected =
+        request.headers.value('x-nex-file-version') ??
+        _unquoteTag(request.headers.value(HttpHeaders.ifMatchHeader));
+    if (expected != null && expected != '*' && expected != version) {
+      throw const _ApiException(
+        412,
+        'file_changed',
+        'The PC file changed. Refresh the folder before downloading again.',
+      );
+    }
     final range = _parseRange(
       request.headers.value(HttpHeaders.rangeHeader),
       length,
@@ -563,6 +1300,8 @@ final class NexGalleryServer {
     final end = range?.end ?? (length - 1);
     request.response.headers
       ..set(HttpHeaders.acceptRangesHeader, 'bytes')
+      ..set('X-Nex-File-Version', version)
+      ..set(HttpHeaders.etagHeader, '"$version"')
       ..set(HttpHeaders.contentTypeHeader, _contentType(relativePath))
       ..set(
         'Content-Disposition',
@@ -592,6 +1331,115 @@ final class NexGalleryServer {
     }
     await request.response.close();
   }
+
+  static const _videoExtensions = <String>{
+    'mp4', 'm4v', 'mov', 'mkv', 'avi', 'webm', 'wmv', 'flv', '3gp', 'mpg', //
+    'mpeg', 'ts', 'mts', 'm2ts', 'vob',
+  };
+
+  /// Resolves the original video and the proxy state for `quality`.
+  Future<(String, String, int, ProxyState)> _proxyState(
+    HttpRequest request,
+  ) async {
+    final proxies = _proxies;
+    if (proxies == null) {
+      throw const _ApiException(
+        501,
+        'proxy_unavailable',
+        'Install FFmpeg on the PC to stream smaller copies of videos.',
+      );
+    }
+    final rootId = _requiredQuery(request, 'root');
+    final relativePath = _requiredQuery(request, 'path');
+    final quality = int.tryParse(request.uri.queryParameters['quality'] ?? '');
+    if (!videoProxyQualities.contains(quality)) {
+      throw FormatException(
+        'quality must be one of ${videoProxyQualities.join(', ')}.',
+      );
+    }
+    final name = _basename(relativePath).toLowerCase();
+    if (!_videoExtensions.contains(name.split('.').last)) {
+      throw const _ApiException(
+        415,
+        'not_a_video',
+        'Only videos have smaller copies.',
+      );
+    }
+    final file = File(
+      await _pathGuard.resolve(rootId, relativePath, allowRoot: false),
+    );
+    if (!await file.exists()) {
+      throw const _ApiException(400, 'not_a_file', 'Path is not a file.');
+    }
+    final state = await proxies.request(
+      file,
+      _version(await file.stat()),
+      quality!,
+    );
+    return (rootId, relativePath, quality, state);
+  }
+
+  /// Starts (or reports) a smaller copy of a video for slow connections.
+  Future<void> _handleProxyStatus(HttpRequest request) async {
+    final (_, _, quality, state) = await _proxyState(request);
+    await _json(request.response, 200, <String, Object?>{
+      ...state.toJson(),
+      'quality': quality,
+    });
+  }
+
+  /// Streams a finished proxy with byte ranges, like an original.
+  Future<void> _handleProxy(
+    HttpRequest request,
+    DeviceIdentity identity,
+  ) async {
+    final (rootId, relativePath, quality, state) = await _proxyState(request);
+    final file = state.file;
+    if (state.status != ProxyStatus.ready || file == null) {
+      throw _ApiException(
+        409,
+        'proxy_not_ready',
+        state.error ?? 'The smaller copy is still being prepared.',
+        details: state.toJson(),
+      );
+    }
+    final length = await file.length();
+    final range = _parseRange(
+      request.headers.value(HttpHeaders.rangeHeader),
+      length,
+    );
+    final start = range?.start ?? 0;
+    final end = range?.end ?? (length - 1);
+    request.response.headers
+      ..set(HttpHeaders.acceptRangesHeader, 'bytes')
+      ..set(HttpHeaders.contentTypeHeader, 'video/mp4');
+    if (range != null) {
+      request.response.statusCode = HttpStatus.partialContent;
+      request.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes $start-$end/$length',
+      );
+    }
+    final responseLength = length == 0 ? 0 : end - start + 1;
+    request.response.contentLength = responseLength;
+    if (start == 0) {
+      await _safeAudit(
+        action: 'files.stream.proxy',
+        outcome: 'success',
+        identity: identity,
+        rootId: rootId,
+        relativePath: relativePath,
+        details: <String, Object?>{'quality': quality},
+      );
+    }
+    if (request.method != 'HEAD' && responseLength > 0) {
+      await request.response.addStream(file.openRead(start, end + 1));
+    }
+    await request.response.close();
+  }
+
+  /// Waits for queued video conversions, for tests.
+  Future<void> get proxiesSettled => _proxies?.settled ?? Future.value();
 
   Future<void> _handleUpload(
     HttpRequest request,
@@ -653,11 +1501,17 @@ final class NexGalleryServer {
         );
         final parent = File(target).parent;
         if (!await parent.exists()) {
-          throw const _ApiException(
-            409,
-            'parent_not_found',
-            'Destination folder does not exist.',
-          );
+          // Uploads may create missing folders inside the shared root, for
+          // example dated camera-backup folders.
+          if (offset != 0 ||
+              request.headers.value('x-upload-create-parents') != 'true') {
+            throw const _ApiException(
+              409,
+              'parent_not_found',
+              'Destination folder does not exist.',
+            );
+          }
+          await parent.create(recursive: true);
         }
         await _pathGuard.resolve(
           rootId,
@@ -729,7 +1583,7 @@ final class NexGalleryServer {
               await rollback.close();
             }
           } catch (rollbackError) {
-            stderr.writeln(
+            config.log(
               'Could not roll upload back to offset $offset: $rollbackError',
             );
           }
@@ -786,6 +1640,26 @@ final class NexGalleryServer {
               'Uploaded file checksum did not match.',
             );
           }
+        }
+        if (needsUploadScan(relativePath)) {
+          final held = await _quarantine(
+            rootId,
+            _normalizedRelative(relativePath),
+            part,
+            size: nextOffset,
+            sha256: actualHash,
+            identity: identity,
+          );
+          await _json(request.response, 201, <String, Object?>{
+            'uploadId': uploadId,
+            'path': _normalizedRelative(relativePath),
+            'size': nextOffset,
+            'complete': true,
+            'sha256': ?actualHash,
+            'quarantined': true,
+            'scan': held.status.name,
+          });
+          return;
         }
         // The part file is beside its destination, so rename is an atomic finalize
         // on the supported local filesystems when the destination does not exist.
@@ -866,6 +1740,7 @@ final class NexGalleryServer {
       sourcePath,
       allowRoot: false,
     );
+    await _checkVersion(source, body);
     final destination = await _pathGuard.resolve(
       rootId,
       destinationPath,
@@ -923,6 +1798,7 @@ final class NexGalleryServer {
       relativePath,
       allowRoot: false,
     );
+    await _checkVersion(source, body);
     final trashDirectory = await _trashDirectory(rootId);
     final trashId =
         '${DateTime.now().toUtc().microsecondsSinceEpoch}-${_random.nextInt(1 << 32).toRadixString(16)}';
@@ -1131,9 +2007,18 @@ final class NexGalleryServer {
     final tokenId = body['tokenId'] is String
         ? body['tokenId'] as String
         : identity.tokenId;
+    if (tokenId != identity.tokenId &&
+        !_isLoopback(request.connectionInfo?.remoteAddress)) {
+      throw const _ApiException(
+        403,
+        'local_only',
+        'Only the PC owner can revoke another device.',
+      );
+    }
     if (!await _tokenStore.revoke(tokenId)) {
       throw const _ApiException(404, 'token_not_found', 'Token was not found.');
     }
+    _events.add('devices');
     await _safeAudit(
       action: 'tokens.revoke',
       outcome: 'success',
@@ -1153,6 +2038,7 @@ final class NexGalleryServer {
     );
     if (!await directory.exists()) {
       await directory.create();
+      await _hideOnWindows(directory);
     }
     final resolved = await _pathGuard.resolve(
       rootId,
@@ -1161,6 +2047,265 @@ final class NexGalleryServer {
     );
     return Directory(resolved);
   }
+
+  /// Windows does not hide dot-folders; the owner's Explorer view should not
+  /// fill with nexGallery's private folders.
+  static Future<void> _hideOnWindows(Directory directory) async {
+    if (!Platform.isWindows) return;
+    try {
+      await Process.run('attrib', ['+h', directory.path]);
+    } on ProcessException {
+      // A visible folder is harmless.
+    }
+  }
+
+  static const _quarantineFolder = '.nexgallery-quarantine';
+
+  Future<Directory> _quarantineDirectory(String rootId) async =>
+      (await _existingQuarantine(rootId, create: true))!;
+
+  /// Null when nothing was ever quarantined in this root, so listing never
+  /// adds folders to shared roots.
+  Future<Directory?> _existingQuarantine(
+    String rootId, {
+    bool create = false,
+  }) async {
+    final root = _pathGuard.root(rootId);
+    final directory = Directory(
+      '${root.canonicalPath}${Platform.pathSeparator}$_quarantineFolder',
+    );
+    if (!await directory.exists()) {
+      if (!create) return null;
+      await directory.create();
+      await _hideOnWindows(directory);
+    }
+    return Directory(
+      await _pathGuard.resolve(rootId, _quarantineFolder, allowInternal: true),
+    );
+  }
+
+  File _quarantinePayload(Directory directory, String id) =>
+      File('${directory.path}${Platform.pathSeparator}$id.payload');
+
+  File _quarantineRecord(Directory directory, String id) =>
+      File('${directory.path}${Platform.pathSeparator}$id.json');
+
+  /// Moves a finished upload out of the shared folder until it is scanned.
+  Future<QuarantinedUpload> _quarantine(
+    String rootId,
+    String relativePath,
+    File part, {
+    required int size,
+    required String? sha256,
+    required DeviceIdentity identity,
+  }) async {
+    final directory = await _quarantineDirectory(rootId);
+    final item = QuarantinedUpload(
+      id:
+          '${DateTime.now().toUtc().microsecondsSinceEpoch}-'
+          '${_random.nextInt(1 << 32).toRadixString(16)}',
+      root: rootId,
+      path: relativePath,
+      size: size,
+      uploadedAt: DateTime.now().toUtc(),
+      status: _scanner == null
+          ? QuarantineStatus.held
+          : QuarantineStatus.scanning,
+      deviceName: identity.name,
+      sha256: sha256,
+      scanner: _scanner?.name,
+    );
+    await markFromInternet(part);
+    final payload = _quarantinePayload(directory, item.id);
+    await part.rename(payload.path);
+    await _quarantineRecord(
+      directory,
+      item.id,
+    ).writeAsString(item.encode(), flush: true);
+    await _safeAudit(
+      action: 'files.upload.quarantine',
+      outcome: item.status.name,
+      identity: identity,
+      rootId: rootId,
+      relativePath: relativePath,
+      details: <String, Object?>{'size': size, 'sha256': ?sha256},
+    );
+    _events.add('quarantine');
+    if (item.status == QuarantineStatus.scanning) _queueScan(item);
+    return item;
+  }
+
+  /// Scans run one at a time so a burst of uploads cannot overload the PC.
+  void _queueScan(QuarantinedUpload item) {
+    _scans = _scans.then((_) => _scan(item)).catchError((Object error) {
+      config.log('Upload scan failed: $error');
+    });
+  }
+
+  Future<void> _scan(QuarantinedUpload item) async {
+    final directory = await _quarantineDirectory(item.root);
+    final payload = _quarantinePayload(directory, item.id);
+    if (!await payload.exists()) return;
+    final verdict = await _scanner!.scan(payload);
+    if (verdict == ScanVerdict.clean) {
+      final path = await _releaseQuarantined(item, by: 'scanner');
+      if (path != null) return;
+    }
+    item.status = verdict == ScanVerdict.threat
+        ? QuarantineStatus.blocked
+        : QuarantineStatus.held;
+    await _quarantineRecord(
+      directory,
+      item.id,
+    ).writeAsString(item.encode(), flush: true);
+    await _safeAudit(
+      action: 'files.upload.scan',
+      outcome: item.status.name,
+      rootId: item.root,
+      relativePath: item.path,
+      details: <String, Object?>{'scanner': ?item.scanner},
+    );
+    _events.add('quarantine');
+  }
+
+  /// Moves a quarantined upload to the folder the phone chose, renaming it
+  /// when that name was taken meanwhile. Returns the final path.
+  Future<String?> _releaseQuarantined(
+    QuarantinedUpload item, {
+    required String by,
+  }) async {
+    final directory = await _quarantineDirectory(item.root);
+    final payload = _quarantinePayload(directory, item.id);
+    if (!await payload.exists()) return null;
+    final lockKey = '${item.root}:${item.path}';
+    return _uploadLocks.run(Platform.isWindows ? lockKey.toLowerCase() : lockKey, () async {
+      var path = item.path;
+      var target = await _pathGuard.resolve(
+        item.root,
+        path,
+        mustExist: false,
+        allowRoot: false,
+      );
+      for (
+        var copy = 2;
+        await FileSystemEntity.type(target, followLinks: false) !=
+            FileSystemEntityType.notFound;
+        copy++
+      ) {
+        final dot = item.path.lastIndexOf('.');
+        final slash = item.path.lastIndexOf('/');
+        path = dot > slash + 1
+            ? '${item.path.substring(0, dot)} ($copy)${item.path.substring(dot)}'
+            : '${item.path} ($copy)';
+        target = await _pathGuard.resolve(
+          item.root,
+          path,
+          mustExist: false,
+          allowRoot: false,
+        );
+      }
+      await File(target).parent.create(recursive: true);
+      await payload.rename(target);
+      final record = _quarantineRecord(directory, item.id);
+      if (await record.exists()) await record.delete();
+      await _safeAudit(
+        action: 'files.upload.release',
+        outcome: 'success',
+        rootId: item.root,
+        relativePath: path,
+        details: <String, Object?>{'by': by},
+      );
+      _events.add('quarantine');
+      return path;
+    });
+  }
+
+  /// Uploads held out of the shared folders, newest first.
+  Future<List<QuarantinedUpload>> quarantined() async {
+    final items = <QuarantinedUpload>[];
+    for (final rootId in _pathGuard.roots.keys) {
+      final directory = await _existingQuarantine(rootId);
+      if (directory == null) continue;
+      await for (final entity in directory.list()) {
+        if (entity is! File || !entity.path.endsWith('.json')) continue;
+        try {
+          final item = QuarantinedUpload.fromJson(
+            jsonDecode(await entity.readAsString()) as Map<String, dynamic>,
+          );
+          if (item.root == rootId) items.add(item);
+        } on Object {
+          // A damaged record leaves its payload for manual cleanup.
+        }
+      }
+    }
+    items.sort((a, b) => b.uploadedAt.compareTo(a.uploadedAt));
+    return items;
+  }
+
+  Future<QuarantinedUpload> _findQuarantined(String rootId, String id) async {
+    if (!QuarantinedUpload.idPattern.hasMatch(id)) {
+      throw const _ApiException(400, 'invalid_id', 'Invalid upload id.');
+    }
+    for (final item in await quarantined()) {
+      if (item.root == rootId && item.id == id) return item;
+    }
+    throw const _ApiException(404, 'not_found', 'Held upload was not found.');
+  }
+
+  /// Releases an upload no scanner could check. Flagged uploads cannot be
+  /// released.
+  Future<String> releaseQuarantined(String rootId, String id) async {
+    final item = await _findQuarantined(rootId, id);
+    if (item.status != QuarantineStatus.held) {
+      throw _ApiException(
+        409,
+        'not_releasable',
+        item.status == QuarantineStatus.blocked
+            ? '${item.scanner ?? 'The scanner'} found a threat in this file.'
+            : 'This file is still being scanned.',
+      );
+    }
+    final path = await _releaseQuarantined(item, by: 'owner');
+    if (path == null) {
+      throw const _ApiException(404, 'not_found', 'Held upload was not found.');
+    }
+    return path;
+  }
+
+  Future<void> deleteQuarantined(String rootId, String id) async {
+    final item = await _findQuarantined(rootId, id);
+    final directory = await _quarantineDirectory(rootId);
+    final payload = _quarantinePayload(directory, item.id);
+    if (await payload.exists()) await payload.delete();
+    await _quarantineRecord(directory, item.id).delete();
+    await _safeAudit(
+      action: 'files.upload.discard',
+      outcome: 'success',
+      rootId: rootId,
+      relativePath: item.path,
+    );
+    _events.add('quarantine');
+  }
+
+  /// Scans that a restart interrupted start again.
+  Future<void> _resumeScans() async {
+    for (final item in await quarantined()) {
+      if (item.status != QuarantineStatus.scanning) continue;
+      if (_scanner == null) {
+        item.status = QuarantineStatus.held;
+        final directory = await _quarantineDirectory(item.root);
+        await _quarantineRecord(
+          directory,
+          item.id,
+        ).writeAsString(item.encode(), flush: true);
+      } else {
+        _queueScan(item);
+      }
+    }
+  }
+
+  /// Waits for queued upload scans, for tests and shutdown.
+  Future<void> get scansSettled => _scans;
 
   Future<Map<String, Object?>> _metadata(
     String rootId,
@@ -1180,7 +2325,44 @@ final class NexGalleryServer {
       },
       'size': type == FileSystemEntityType.file ? stat.size : null,
       'modifiedAt': stat.modified.toUtc().toIso8601String(),
+      if (type == FileSystemEntityType.file) 'version': _version(stat),
     };
+  }
+
+  /// Changes whenever the file's size or modification time does. Sent as
+  /// the download ETag and checked by `If-Match` and change requests.
+  static String _version(FileStat stat) =>
+      '${stat.size}:${stat.modified.toUtc().microsecondsSinceEpoch}';
+
+  static String? _unquoteTag(String? value) {
+    if (value == null) return null;
+    final trimmed = value.trim();
+    return trimmed.length >= 2 &&
+            trimmed.startsWith('"') &&
+            trimmed.endsWith('"')
+        ? trimmed.substring(1, trimmed.length - 1)
+        : trimmed;
+  }
+
+  /// Rejects a change made against an older listing of a file, so a phone
+  /// never silently moves or trashes a newer version.
+  static Future<void> _checkVersion(
+    String absolutePath,
+    Map<String, dynamic> body,
+  ) async {
+    final expected = body['version'];
+    if (expected == null) return;
+    if (expected is! String || expected.length > 64) {
+      throw const FormatException('version must be a string.');
+    }
+    final stat = await FileStat.stat(absolutePath);
+    if (stat.type == FileSystemEntityType.file && _version(stat) != expected) {
+      throw const _ApiException(
+        412,
+        'file_changed',
+        'The PC file changed. Refresh the folder and try again.',
+      );
+    }
   }
 
   Future<Map<String, dynamic>> _readJson(HttpRequest request) async {
@@ -1202,11 +2384,71 @@ final class NexGalleryServer {
         );
       }
     }
+    if (_signed[request] == true &&
+        !constantTimeEquals(
+          request.headers.value(SignedHeaders.bodyHashHeader) ?? '',
+          sha256Hex(bytes),
+        )) {
+      throw const _ApiException(
+        401,
+        'invalid_signature',
+        'The signed request body does not match.',
+      );
+    }
     final value = jsonDecode(utf8.decode(bytes));
     if (value is! Map<String, dynamic>) {
       throw const FormatException('JSON body must be an object.');
     }
+    final identity = _identities[request];
+    if (identity != null && value['root'] is String) {
+      _checkRoot(identity, value['root'] as String);
+    }
     return value;
+  }
+
+  Future<void> _handleThumbnail(
+    HttpRequest request,
+    DeviceIdentity identity,
+  ) async {
+    final rootId = _requiredQuery(request, 'root');
+    final relativePath = _requiredQuery(request, 'path');
+    final size = switch (int.tryParse(
+      request.uri.queryParameters['size'] ?? '',
+    )) {
+      final value? when value <= 256 => 256,
+      final value? when value <= 512 => 512,
+      _ => 1024,
+    };
+    final file = File(
+      await _pathGuard.resolve(rootId, relativePath, allowRoot: false),
+    );
+    if (!await file.exists()) {
+      throw const _ApiException(400, 'not_a_file', 'Path is not a file.');
+    }
+    if (!ThumbnailCache.supports(relativePath)) {
+      throw const _ApiException(
+        415,
+        'thumbnail_unsupported',
+        'Previews are available for common photo formats.',
+      );
+    }
+    final File thumbnail;
+    try {
+      thumbnail = await _thumbnails.thumbnail(file, size);
+    } on FormatException {
+      throw const _ApiException(
+        415,
+        'thumbnail_unsupported',
+        'This photo could not be previewed.',
+      );
+    }
+    request.response
+      ..statusCode = HttpStatus.ok
+      ..headers.set(HttpHeaders.contentTypeHeader, 'image/jpeg')
+      ..headers.set('Cache-Control', 'private, max-age=86400')
+      ..contentLength = await thumbnail.length();
+    await request.response.addStream(thumbnail.openRead());
+    await request.response.close();
   }
 
   Future<void> _safeAudit({
@@ -1229,7 +2471,7 @@ final class NexGalleryServer {
         details: details,
       );
     } catch (error) {
-      stderr.writeln('Could not write audit log: $error');
+      config.log('Could not write audit log: $error');
     }
   }
 
