@@ -70,6 +70,13 @@ final class MediaAlbum {
   );
 }
 
+/// User organization of one item inside an encrypted organization backup.
+typedef OrganizationRecord = ({
+  bool favorite,
+  MediaSection section,
+  Map<String, String> attributes,
+});
+
 enum CatalogSortField { name, modifiedAt, createdAt, takenAt, size, kind }
 
 enum CatalogSortDirection { ascending, descending }
@@ -104,6 +111,7 @@ final class CatalogQuery {
   final int limit;
   final Set<MediaKind> kinds;
   final Set<MediaSource> sources;
+
   /// An access-filtered identity set. Null means unrestricted; empty means no
   /// currently authorized items, including when media permission was revoked.
   final Set<String>? itemIds;
@@ -133,7 +141,9 @@ final class CatalogQuery {
     limit: limit ?? this.limit,
     kinds: kinds ?? this.kinds,
     sources: sources ?? this.sources,
-    itemIds: identical(itemIds, _unset) ? this.itemIds : itemIds as Iterable<String>?,
+    itemIds: identical(itemIds, _unset)
+        ? this.itemIds
+        : itemIds as Iterable<String>?,
   );
 }
 

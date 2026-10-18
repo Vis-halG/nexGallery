@@ -31,6 +31,16 @@ final class SqliteCatalogPersistence implements CloseableCatalogPersistence {
   String? _recoveredDatabasePath;
   String? _backupError;
 
+  // The last committed state. Later saves write only what changed against it;
+  // the repository keeps unchanged items as the same objects.
+  Map<String, MediaItem>? _savedItems;
+  Map<String, MediaAlbum>? _savedAlbums;
+
+  void _remember(CatalogSnapshot snapshot) {
+    _savedItems = {for (final item in snapshot.items) item.id: item};
+    _savedAlbums = {for (final album in snapshot.albums) album.id: album};
+  }
+
   /// If recovery was needed, the original remains here for manual inspection.
   String? get recoveredDatabasePath => _recoveredDatabasePath;
 
@@ -48,6 +58,7 @@ final class SqliteCatalogPersistence implements CloseableCatalogPersistence {
       _recoveredDatabasePath = result.$2 ?? _recoveredDatabasePath;
       _backupError = result.$3;
       _blockedError = null;
+      _remember(result.$1);
       return result.$1;
     } catch (error) {
       _blockedError = error;
@@ -66,9 +77,16 @@ final class SqliteCatalogPersistence implements CloseableCatalogPersistence {
     final path = filePath;
     final legacy = legacyJsonFilePath;
     final limit = maximumLegacyBytes;
-    final result = await _saveInWorker(path, legacy, limit, snapshot);
+    _validateSnapshot(snapshot);
+    final delta = _CatalogDelta.between(_savedItems, _savedAlbums, snapshot);
+    var result = delta == null
+        ? await _saveInWorker(path, legacy, limit, snapshot)
+        : await _saveDeltaInWorker(path, legacy, limit, delta);
+    // A database restored from backup no longer matches the last save.
+    if (result.$3) result = await _saveInWorker(path, legacy, limit, snapshot);
     _recoveredDatabasePath = result.$1 ?? _recoveredDatabasePath;
     _backupError = result.$2;
+    _remember(snapshot);
   });
 
   Future<T> _enqueue<T>(Future<T> Function() operation) {
@@ -95,12 +113,73 @@ Future<(CatalogSnapshot, String?, String?)> _loadInWorker(
   int limit,
 ) => Isolate.run(() => _SqliteStore(path, legacy, limit).load());
 
-Future<(String?, String?)> _saveInWorker(
+Future<(String?, String?, bool)> _saveInWorker(
   String path,
   String legacy,
   int limit,
   CatalogSnapshot snapshot,
 ) => Isolate.run(() => _SqliteStore(path, legacy, limit).save(snapshot));
+
+Future<(String?, String?, bool)> _saveDeltaInWorker(
+  String path,
+  String legacy,
+  int limit,
+  _CatalogDelta delta,
+) => Isolate.run(() => _SqliteStore(path, legacy, limit).saveDelta(delta));
+
+/// What changed since the last committed save. Only this crosses to the
+/// worker isolate.
+final class _CatalogDelta {
+  _CatalogDelta({
+    required this.items,
+    required this.removedItemIds,
+    required this.albums,
+    required this.removedAlbumIds,
+    required this.schemaVersion,
+    required this.savedAt,
+  });
+
+  static _CatalogDelta? between(
+    Map<String, MediaItem>? savedItems,
+    Map<String, MediaAlbum>? savedAlbums,
+    CatalogSnapshot snapshot,
+  ) {
+    if (savedItems == null || savedAlbums == null) return null;
+    final items = <MediaItem>[];
+    final present = <String>{};
+    for (final item in snapshot.items) {
+      present.add(item.id);
+      if (!identical(savedItems[item.id], item)) items.add(item);
+    }
+    final albums = <MediaAlbum>[];
+    final presentAlbums = <String>{};
+    for (final album in snapshot.albums) {
+      presentAlbums.add(album.id);
+      if (!identical(savedAlbums[album.id], album)) albums.add(album);
+    }
+    return _CatalogDelta(
+      items: items,
+      removedItemIds: [
+        for (final id in savedItems.keys)
+          if (!present.contains(id)) id,
+      ],
+      albums: albums,
+      removedAlbumIds: [
+        for (final id in savedAlbums.keys)
+          if (!presentAlbums.contains(id)) id,
+      ],
+      schemaVersion: snapshot.schemaVersion,
+      savedAt: snapshot.savedAt,
+    );
+  }
+
+  final List<MediaItem> items;
+  final List<String> removedItemIds;
+  final List<MediaAlbum> albums;
+  final List<String> removedAlbumIds;
+  final int schemaVersion;
+  final DateTime savedAt;
+}
 
 final class _SqliteStore {
   _SqliteStore(this.path, this.legacyPath, this.maximumLegacyBytes);
@@ -126,23 +205,51 @@ final class _SqliteStore {
     }
   }
 
-  Future<(String?, String?)> save(CatalogSnapshot snapshot) async {
+  Future<(String?, String?, bool)> save(CatalogSnapshot snapshot) async {
     _validateSnapshot(snapshot);
     final db = _open();
     try {
       _transaction(db, () => _write(db, snapshot));
       await _tryBackup(db);
-      return (recoveredPath, backupError);
+      return (recoveredPath, backupError, false);
     } finally {
       db.close();
     }
   }
 
-  Database _open() {
+  /// Writes only [delta]. The database was verified when it was loaded in
+  /// this process, so the full integrity pass is not repeated on every save.
+  /// Reports `true` when the file had to be restored and needs a full write.
+  Future<(String?, String?, bool)> saveDelta(_CatalogDelta delta) async {
+    // A database deleted since loading cannot take a partial write.
+    if (!File(path).existsSync()) return (null, null, true);
+    final db = _open(verified: true);
+    try {
+      if (recoveredPath != null) return (recoveredPath, backupError, true);
+      _transaction(db, () => _writeDelta(db, delta));
+      await _tryBackup(db);
+      return (recoveredPath, backupError, false);
+    } finally {
+      db.close();
+    }
+  }
+
+  Database _open({bool verified = false}) {
     File(path).parent.createSync(recursive: true);
     final exists = File(path).existsSync();
     var version = 0;
-    if (exists) {
+    if (exists && verified) {
+      final probe = sqlite3.open(path, mode: OpenMode.readOnly);
+      try {
+        version = probe.userVersion;
+      } finally {
+        probe.close();
+      }
+      if (version == 0) {
+        _recover();
+        version = _inspect(path);
+      }
+    } else if (exists) {
       try {
         version = _inspect(path);
       } on SqliteException catch (error) {
@@ -382,41 +489,10 @@ final class _SqliteStore {
     );
     try {
       for (final item in snapshot.items) {
-        final metadata = item.metadata;
-        itemStatement.execute(<Object?>[
-          item.id,
-          item.name,
-          item.uri,
-          item.relativePath,
-          item.kind.name,
-          item.source.name,
-          item.section.name,
-          item.isFavorite ? 1 : 0,
-          item.isAvailable ? 1 : 0,
-          item.thumbnailUri,
-          item.indexedAt.toUtc().microsecondsSinceEpoch,
-          item.deletedAt?.toUtc().microsecondsSinceEpoch,
-          jsonEncode(metadata.toJson()),
-          <String>[
-            item.name,
-            item.relativePath,
-            metadata.extension ?? '',
-            metadata.mimeType ?? '',
-            ...metadata.tags,
-            ...metadata.attributes.values,
-          ].join(' '),
-        ]);
+        itemStatement.execute(_itemRow(item));
       }
       for (final album in snapshot.albums) {
-        albumStatement.execute(<Object?>[
-          album.id,
-          album.name,
-          album.kind.name,
-          album.createdAt.toUtc().microsecondsSinceEpoch,
-          album.updatedAt.toUtc().microsecondsSinceEpoch,
-          album.coverItemId,
-          album.isReadOnly ? 1 : 0,
-        ]);
+        albumStatement.execute(_albumRow(album));
         for (var position = 0; position < album.itemIds.length; position++) {
           membershipStatement.execute(<Object?>[
             album.id,
@@ -425,18 +501,119 @@ final class _SqliteStore {
           ]);
         }
       }
-      db.execute(
-        'INSERT OR REPLACE INTO catalog_state VALUES (1, ?, ?)',
-        <Object?>[
-          snapshot.schemaVersion,
-          snapshot.savedAt.toUtc().microsecondsSinceEpoch,
-        ],
-      );
+      _writeState(db, snapshot.schemaVersion, snapshot.savedAt);
     } finally {
       itemStatement.close();
       albumStatement.close();
       membershipStatement.close();
     }
+  }
+
+  void _writeDelta(Database db, _CatalogDelta delta) {
+    // Upserts keep each row's id, so the full-text index update trigger runs.
+    final upsertItem = db.prepare('''
+INSERT INTO media_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  name = excluded.name, uri = excluded.uri,
+  relative_path = excluded.relative_path, kind = excluded.kind,
+  source = excluded.source, section = excluded.section,
+  is_favorite = excluded.is_favorite, is_available = excluded.is_available,
+  thumbnail_uri = excluded.thumbnail_uri, indexed_at = excluded.indexed_at,
+  deleted_at = excluded.deleted_at, metadata_json = excluded.metadata_json,
+  searchable = excluded.searchable''');
+    final upsertAlbum = db.prepare('''
+INSERT INTO albums VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  name = excluded.name, kind = excluded.kind,
+  created_at = excluded.created_at, updated_at = excluded.updated_at,
+  cover_item_id = excluded.cover_item_id,
+  is_read_only = excluded.is_read_only''');
+    final deleteItem = db.prepare('DELETE FROM media_items WHERE id = ?');
+    final deleteAlbum = db.prepare('DELETE FROM albums WHERE id = ?');
+    final clearMembers = db.prepare(
+      'DELETE FROM album_items WHERE album_id = ?',
+    );
+    final addMember = db.prepare('INSERT INTO album_items VALUES (?, ?, ?)');
+    try {
+      for (final id in delta.removedAlbumIds) {
+        deleteAlbum.execute(<Object?>[id]);
+      }
+      for (final album in delta.albums) {
+        clearMembers.execute(<Object?>[album.id]);
+      }
+      for (final id in delta.removedItemIds) {
+        deleteItem.execute(<Object?>[id]);
+      }
+      for (final item in delta.items) {
+        upsertItem.execute(_itemRow(item));
+      }
+      for (final album in delta.albums) {
+        upsertAlbum.execute(_albumRow(album));
+        for (var position = 0; position < album.itemIds.length; position++) {
+          addMember.execute(<Object?>[
+            album.id,
+            album.itemIds[position],
+            position,
+          ]);
+        }
+      }
+      _writeState(db, delta.schemaVersion, delta.savedAt);
+    } finally {
+      for (final statement in [
+        upsertItem,
+        upsertAlbum,
+        deleteItem,
+        deleteAlbum,
+        clearMembers,
+        addMember,
+      ]) {
+        statement.close();
+      }
+    }
+  }
+
+  static List<Object?> _itemRow(MediaItem item) {
+    final metadata = item.metadata;
+    return <Object?>[
+      item.id,
+      item.name,
+      item.uri,
+      item.relativePath,
+      item.kind.name,
+      item.source.name,
+      item.section.name,
+      item.isFavorite ? 1 : 0,
+      item.isAvailable ? 1 : 0,
+      item.thumbnailUri,
+      item.indexedAt.toUtc().microsecondsSinceEpoch,
+      item.deletedAt?.toUtc().microsecondsSinceEpoch,
+      jsonEncode(metadata.toJson()),
+      <String>[
+        item.name,
+        item.relativePath,
+        metadata.extension ?? '',
+        metadata.mimeType ?? '',
+        ...metadata.tags,
+        ...metadata.attributes.values,
+      ].join(' '),
+    ];
+  }
+
+  static List<Object?> _albumRow(MediaAlbum album) => <Object?>[
+    album.id,
+    album.name,
+    album.kind.name,
+    album.createdAt.toUtc().microsecondsSinceEpoch,
+    album.updatedAt.toUtc().microsecondsSinceEpoch,
+    album.coverItemId,
+    album.isReadOnly ? 1 : 0,
+  ];
+
+  static void _writeState(Database db, int schemaVersion, DateTime savedAt) {
+    db.execute(
+      'INSERT OR REPLACE INTO catalog_state VALUES (1, ?, ?)',
+      <Object?>[schemaVersion, savedAt.toUtc().microsecondsSinceEpoch],
+    );
   }
 
   Future<void> _backupIfDue(Database db) async {
@@ -450,13 +627,10 @@ final class _SqliteStore {
     final temporary = File(
       '$path.backup.${DateTime.now().microsecondsSinceEpoch}.tmp',
     );
-    final destination = sqlite3.open(temporary.path);
-    try {
-      destination.execute('PRAGMA synchronous = FULL');
-      await db.backup(destination, nPage: 128).drain<void>();
-    } finally {
-      destination.close();
-    }
+    // One consistent, compacted copy; page-by-page backup with a sync per
+    // step took about 20 seconds for 100,000 items.
+    db.execute('VACUUM INTO ?', <Object?>[temporary.path]);
+    _flushFile(temporary.path);
     _inspect(temporary.path);
     final previous = File('$path.bak.previous');
     if (backup.existsSync()) {

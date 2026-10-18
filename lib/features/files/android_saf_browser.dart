@@ -197,6 +197,25 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
                       value: _DocumentAction.share,
                       child: Text('Share'),
                     ),
+                  const PopupMenuItem(
+                    value: _DocumentAction.copy,
+                    child: Text('Copy to folder'),
+                  ),
+                  if (item.canDelete)
+                    const PopupMenuItem(
+                      value: _DocumentAction.move,
+                      child: Text('Move to folder'),
+                    ),
+                  const PopupMenuItem(
+                    value: _DocumentAction.zip,
+                    child: Text('Create ZIP'),
+                  ),
+                  if (!item.isDirectory &&
+                      (item.name ?? '').toLowerCase().endsWith('.zip'))
+                    const PopupMenuItem(
+                      value: _DocumentAction.extract,
+                      child: Text('Extract ZIP'),
+                    ),
                   if (item.canRename)
                     const PopupMenuItem(
                       value: _DocumentAction.rename,
@@ -342,6 +361,42 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
           await _bridge.openMedia(item.uri, mimeType: item.mimeType);
         case _DocumentAction.share:
           await _bridge.shareMedia(<Uri>[item.uri], mimeType: item.mimeType);
+        case _DocumentAction.copy:
+        case _DocumentAction.move:
+        case _DocumentAction.zip:
+        case _DocumentAction.extract:
+          final destination = await _bridge.pickDirectory();
+          if (destination.uri == null || !mounted) return;
+          setState(() => _loading = true);
+          if (action == _DocumentAction.copy ||
+              action == _DocumentAction.move) {
+            await _bridge.copyDocument(
+              item.uri,
+              destination.uri!,
+              move: action == _DocumentAction.move,
+            );
+          } else {
+            final extract = action == _DocumentAction.extract;
+            final name = await _askName(
+              extract ? 'Extract into new folder' : 'ZIP filename',
+              'Name',
+              extract
+                  ? (item.name ?? 'Archive').replaceFirst(
+                      RegExp(r'\.zip$', caseSensitive: false),
+                      '',
+                    )
+                  : '${item.name ?? 'Archive'}.zip',
+            );
+            if (name != null) {
+              await _bridge.archiveDocument(
+                item.uri,
+                destination.uri!,
+                name,
+                extract: extract,
+              );
+            }
+          }
+          await _loadCurrent();
         case _DocumentAction.rename:
           final name = await _askName('Rename item', 'New name', item.name);
           if (name == null) return;
@@ -430,7 +485,7 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
   }
 }
 
-enum _DocumentAction { open, share, rename, delete }
+enum _DocumentAction { open, share, rename, delete, copy, move, zip, extract }
 
 final class _FolderLevel {
   const _FolderLevel(this.uri, this.name);

@@ -61,6 +61,8 @@ Future<void> main() async {
       dataDirectory: data,
       port: 0,
       maxUploadChunkBytes: 16,
+      allowWrites: true,
+      requireApproval: false,
     ),
   );
   final client = HttpClient();
@@ -125,6 +127,54 @@ Future<void> main() async {
       caseInsensitiveBearer.status == 200,
       'bearer authentication scheme is case-insensitive',
     );
+
+    final readOnlyServer = await NexGalleryServer.create(
+      RemoteServerConfig(
+        allowedRoots: <String, String>{'media': root.path},
+        dataDirectory: Directory('${workspace.path}/read-only-state'),
+        port: 0,
+        requireApproval: false,
+      ),
+    );
+    await readOnlyServer.start();
+    try {
+      final readOnlyBase = Uri.parse(
+        'http://127.0.0.1:${readOnlyServer.boundPort}',
+      );
+      final pairing = await readOnlyServer.createPairingCode();
+      final paired = await _request(
+        client,
+        readOnlyBase.resolve('/v1/pair'),
+        method: 'POST',
+        jsonBody: <String, Object?>{
+          'code': pairing.code,
+          'deviceName': 'Read-only phone',
+        },
+      );
+      final readOnlyAuth = <String, String>{
+        HttpHeaders.authorizationHeader: 'Bearer ${paired.json['token']}',
+      };
+      final readable = await _request(
+        client,
+        readOnlyBase.resolve('/v1/roots'),
+        headers: readOnlyAuth,
+      );
+      _expect(readable.status == 200, 'read-only default permits browsing');
+      final blocked = await _request(
+        client,
+        readOnlyBase.resolve('/v1/folders'),
+        method: 'POST',
+        headers: readOnlyAuth,
+        jsonBody: <String, Object?>{'root': 'media', 'path': 'blocked-write'},
+      );
+      _expect(
+        blocked.status == 403 &&
+            !await Directory('${root.path}/blocked-write').exists(),
+        'read-only default blocks file mutations',
+      );
+    } finally {
+      await readOnlyServer.stop(force: true);
+    }
 
     final folder = await _request(
       client,
@@ -496,10 +546,10 @@ Future<void> main() async {
       headers: auth,
     );
     _expect(
-      thumbnail.status == 501 &&
+      thumbnail.status == 415 &&
           (thumbnail.json['error'] as Map<String, dynamic>)['code'] ==
-              'thumbnail_not_supported',
-      'thumbnail has explicit unsupported response',
+              'thumbnail_unsupported',
+      'non-photo thumbnail has explicit unsupported response',
     );
 
     final revoke = await _request(

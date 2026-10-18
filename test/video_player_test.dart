@@ -325,6 +325,7 @@ void main() {
     final controllers = <_FakeVideoController>[];
     await tester.pumpWidget(
       MaterialApp(
+        theme: ThemeData(splashFactory: InkRipple.splashFactory),
         home: MediaViewer(
           model: model,
           items: model.items,
@@ -377,6 +378,7 @@ void main() {
       var decoderCreations = 0;
       await tester.pumpWidget(
         MaterialApp(
+          theme: ThemeData(splashFactory: InkRipple.splashFactory),
           home: MediaViewer(
             model: model,
             items: model.items,
@@ -441,6 +443,7 @@ class _PlayerFixture {
   int openCalls = 0;
 
   Widget widget({bool active = true, MediaItem? item, Key? key}) => MaterialApp(
+    theme: ThemeData(splashFactory: InkRipple.splashFactory),
     home: Scaffold(
       backgroundColor: Colors.black,
       body: LocalVideoPlayer(

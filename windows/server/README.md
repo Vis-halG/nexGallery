@@ -1,33 +1,69 @@
-# nexGallery PC server core
+# nexGallery PC server
 
-This directory contains the dependency-free Dart HTTP server behind the planned
-Windows companion. It exposes only folders that the PC owner explicitly names.
-The server starts on `127.0.0.1` by default. `--lan` is an explicit opt-in.
+The Dart HTTP/TLS server behind the Windows app. It exposes only folders the
+PC owner names, to phones the owner approves. The same code runs inside the
+desktop app, as the `nexgallery_server.exe` background agent, and as a
+developer console (`nex_gallery_server.exe`).
 
-## Current security boundary
+## Security boundary
 
-- Transport is plain HTTP. TLS and direct public-internet hosting are **not**
-  implemented.
-- Never port-forward the server port on a router. LAN mode is for a trusted
-  private network. An independently configured encrypted overlay such as
-  Tailscale or WireGuard can carry the traffic, but this repository does not
-  install, configure, or verify either service.
-- Pairing codes expire after five minutes and work once. Successful pairing
-  returns a random bearer token once; the PC stores only its salted SHA-256
-  hash.
-- Every file path is resolved against a configured root. Absolute paths,
-  `..`, reserved server paths, and links that resolve outside that root are
-  rejected.
-- The implementation reduces symlink traversal risk, but Dart's path/open APIs
-  cannot make the validation and open operation one indivisible OS action. Do
-  not grant untrusted local PC accounts write access to an allowed root while
-  the server is operating.
-- Tokens are full-control credentials for the configured roots. A paired
-  device can list and revoke paired tokens.
+- The desktop app and the agent use TLS with a self-signed certificate; phones
+  pin its SHA-256 fingerprint from the pairing QR code. The developer console
+  uses plain HTTP and is for testing only.
+- Never port-forward the server port. "Home network" mode is for a trusted
+  LAN; "Anywhere" mode binds only loopback and this PC's Tailscale addresses.
+- Pairing codes work once and expire after five minutes. Every new phone waits
+  for the owner's approval; the PC stores only salted token hashes and each
+  phone's Ed25519 public key. Phones sign every request (timestamp, nonce,
+  method, path, query, covered headers); replays are refused.
+- Access is read-only by default. Each phone has scopes (browse, download,
+  upload, organize, trash) and optional folder limits.
+- Every path is resolved against an approved root. Absolute paths, `..`,
+  reserved `.nexgallery-` paths and links leaving the root are refused. Dart
+  cannot check and open a path in one OS call, so do not give untrusted local
+  accounts write access to a shared folder while the server runs.
+- Programs, scripts, archives and macro documents uploaded by phones are held
+  in `.nexgallery-quarantine` with Mark-of-the-Web until Microsoft Defender
+  reports them clean. Flagged files can only be deleted; without a scanner they
+  wait for the owner.
+- Download, move and Trash honour the listed file version (`ETag`,
+  `If-Match`, `X-Nex-File-Version`, or a `version` body field) and answer
+  `412 file_changed` when the file changed.
+- Streams, uploads and video conversions keep Windows awake (a power request
+  visible in `powercfg /requests`), plus 90 seconds; "Keep this PC available"
+  holds it while the server runs.
+- The TLS key and owner secret are encrypted for the Windows user with DPAPI.
 
-## Run from source
+## Background agent
 
-From the repository root:
+The desktop app writes `%LOCALAPPDATA%\nexGallery\server\agent.json` and starts
+
+```text
+nexgallery_server.exe --config %LOCALAPPDATA%\nexGallery\server\agent.json
+```
+
+detached, and at sign-in through
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\nexGalleryServer` when the
+owner turns on "Keep running when nexGallery is closed". It runs with the
+user's own rights, has no console window (PE subsystem: Windows GUI), and logs
+to `agent.log` in the same folder (one rotated copy above 1 MiB). In Anywhere
+mode it serves loopback until Tailscale connects, then rebinds. A second agent
+for the same user exits at once.
+
+The app manages the agent over a loopback-only owner API that requires the
+DPAPI-protected owner secret in `X-Nex-Owner`.
+
+## Build
+
+```powershell
+dart run tool/build_server.dart
+```
+
+writes `windows/server/build/nex_gallery_server.exe` (console) and
+`windows/server/build/nexgallery_server.exe` (agent). The Windows app build
+copies the agent next to `nex_gallery.exe`.
+
+## Developer console
 
 ```powershell
 dart run windows/server/bin/nex_gallery_server.dart `
@@ -35,68 +71,53 @@ dart run windows/server/bin/nex_gallery_server.dart `
   --root documents="D:\Documents"
 ```
 
-Add `--lan` when the phone and PC are on a trusted LAN. The console prints an
-eight-digit code and JSON payloads that a UI can encode as QR codes. Port `0`
-selects an available port for testing.
+Add `--lan` for a trusted LAN; port `0` picks a free port. The console prints
+the pairing code and QR payloads. Approve a waiting phone by typing
+`approve ID` (read-only) or `approve ID full`; also `deny ID`, `code`,
+`devices` and `quit`.
 
-Build a standalone executable:
-
-```powershell
-dart compile exe windows/server/bin/nex_gallery_server.dart `
-  -o windows/server/build/nex_gallery_server.exe
-```
-
-The default state directory is `%LOCALAPPDATA%\nexGallery\server`. It contains
-`tokens.json` and append-only `audit.jsonl`. It should remain private to the PC
-account running the server. A different directory can be selected with
-`--data-dir`.
+The default state folder is `%LOCALAPPDATA%\nexGallery\server` (`--data-dir`
+changes it). It holds `tokens.json`, `audit.jsonl`, the TLS identity, the
+thumbnail and video caches, and must stay private to the PC account.
 
 ## Pairing
 
-The CLI creates an initial code. A desktop UI can create another by calling
-`POST /v1/pair/code` from loopback. Code creation is rejected for non-loopback
-clients. The phone exchanges the code once:
-
-```http
-POST /v1/pair
-Content-Type: application/json
-
-{"code":"12345678","deviceName":"My phone"}
-```
-
-The response contains a `token`. Store it in the phone's platform credential
-store and send it on every protected request:
-
-```http
-Authorization: Bearer <token>
-```
+1. The PC shows a code (`POST /v1/pair/code`, owner only).
+2. The phone sends `POST /v1/pair` with `code`, `deviceName` and its
+   `publicKey`, and receives `202` with `requestId` and `pollSecret`.
+3. The owner approves (`POST /v1/pair/approve`) with scopes and folders.
+4. The phone polls `POST /v1/pair/status` and receives its bearer token once.
 
 ## API v1
 
-| Method and path | Purpose |
-| --- | --- |
-| `GET /v1/health` | Minimal unauthenticated health response |
-| `POST /v1/pair/code` | Create a one-time code from the PC itself |
-| `POST /v1/pair` | Exchange code and device name for a bearer token |
-| `GET /v1/roots` | List configured root IDs, without physical PC paths |
-| `GET /v1/list?root=ID&path=PATH` | List up to 5,000 safe child entries |
-| `GET /v1/search?root=ID&path=PATH&q=TEXT&limit=100` | Bounded recursive metadata search |
-| `GET /v1/download?root=ID&path=PATH` | Download or stream; supports one HTTP byte range |
-| `HEAD /v1/download?...` | Read file headers without content |
-| `GET /v1/thumbnail?...` | Explicit `501 thumbnail_not_supported` response |
-| `PUT /v1/upload?root=ID&path=PATH` | Append a resumable raw-data chunk |
-| `POST /v1/folders` | Create one folder below an existing parent |
-| `POST /v1/move` | Rename or move inside one configured root |
-| `POST /v1/trash` | Move a file/folder to hidden recoverable trash |
-| `GET /v1/trash?root=ID` | List up to 1,000 recoverable trash items |
-| `POST /v1/trash/restore` | Restore a trash ID, optionally to a new path |
-| `GET /v1/tokens` | List paired devices and token IDs |
-| `POST /v1/tokens/revoke` | Revoke a token ID, or the caller when omitted |
+Phone endpoints (bearer token plus signature):
 
-JSON request bodies are capped at 1 MiB. General traffic defaults to 240
-requests per minute per address and authenticated device. Pairing is limited to
-10 attempts per minute per address. Search scans at most 50,000 entries and
-returns at most 500 results.
+| Method and path | Scope | Purpose |
+| --- | --- | --- |
+| `GET /v1/health` | none | Health, TLS and write mode |
+| `GET /v1/info` | browse | PC name, this phone's scopes and folders, Wake-on-LAN addresses, video-proxy support |
+| `GET /v1/roots` | browse | Folders this phone may open, without PC paths |
+| `GET /v1/list?root&path&offset&limit` | browse | Paged folder listing with file versions |
+| `GET /v1/search?root&path&q&limit` | browse | Bounded recursive name search |
+| `GET /v1/thumbnail?root&path&size` | browse | Cached JPEG preview of an image |
+| `GET`/`HEAD /v1/download?root&path` | download | Download or stream with one byte range; `ETag` and `If-Match` |
+| `GET /v1/proxy/status?root&path&quality` | download | Start or report a 360/720/1080p copy of a video (needs FFmpeg) |
+| `GET`/`HEAD /v1/proxy?root&path&quality` | download | Stream a finished copy with byte ranges |
+| `PUT /v1/upload?root&path` | upload | Append a resumable chunk |
+| `POST /v1/folders` | organize | Create a folder |
+| `POST /v1/move` | organize | Rename or move inside one folder |
+| `POST /v1/trash`, `GET /v1/trash`, `POST /v1/trash/restore` | trash | Recoverable Trash inside the shared folder |
+| `POST /v1/tokens/revoke` | any | A phone revokes itself |
+
+Owner endpoints (loopback and owner secret): `GET /v1/pair/requests`,
+`POST /v1/pair/approve`, `POST /v1/pair/deny`, `GET /v1/tokens`,
+`POST /v1/tokens/permissions`, `POST /v1/owner/revoke`, `GET /v1/audit`,
+`GET /v1/quarantine`, `POST /v1/quarantine/release`,
+`POST /v1/quarantine/delete`, `POST /v1/owner/shutdown`.
+
+JSON bodies are capped at 1 MiB. Traffic is limited to 240 requests per minute
+per address and per device, pairing to 10 attempts per minute per address.
+Search scans at most 50,000 entries and returns at most 500 results.
 
 ### Resumable upload
 
@@ -109,34 +130,31 @@ X-Upload-Total: 1048576
 X-Upload-Complete: false
 ```
 
-The server appends to a sibling `.part` file only when the supplied offset
-matches its current size. It returns `nextOffset`, allowing the phone to resume
-after a disconnect. The upload ID and declared total must remain stable between
-chunks. The final request sets `X-Upload-Complete: true`; it may also send
-`X-Content-SHA256` with the lowercase 64-character hash. When provided, the
-server verifies the complete file before finalization. The bundled Dart client
-sends this final checksum by default. The `.part` file is then renamed beside
-its destination. Existing destinations are rejected, keeping finalization
-atomic on normal local filesystems. Defaults are 8 MiB per chunk and 20 GiB per
+The server appends to a sibling `.part` file only when the offset matches its
+size and returns `nextOffset`, so the phone resumes after a disconnect. The
+final request sets `X-Upload-Complete: true` and `X-Content-SHA256`; the server
+verifies the hash before renaming the file into place (or into quarantine).
+Existing names are never replaced. Defaults are 8 MiB per chunk and 20 GiB per
 file.
 
 ### File-operation bodies
 
 ```json
-{"root":"photos","path":"Trips/2026"}
+{"root":"photos","path":"Trips/2026","version":"1234:1760745600000000"}
 ```
 
-The folder and trash endpoints use `root` and `path`. Move uses `root`,
-`sourcePath`, and `destinationPath`. Restore uses `root`, `trashId`, and an
-optional `destinationPath`. There is no permanent-delete endpoint in this core.
+Folder and Trash use `root` and `path`; move uses `root`, `sourcePath` and
+`destinationPath`; restore uses `root`, `trashId` and an optional
+`destinationPath`. `version` is optional. There is no permanent-delete
+endpoint.
 
 ## Verification
 
-Run the dependency-free integration suite and compile the executable:
-
 ```powershell
 dart run windows/server/test/remote_server_smoke_test.dart
-dart compile exe windows/server/bin/nex_gallery_server.dart `
-  -o windows/server/build/nex_gallery_server.exe
+dart run tool/build_server.dart
 dart run windows/server/test/compiled_exe_smoke_test.dart
 ```
+
+The compiled test runs both executables: console approval, and the detached
+agent's owner API, approval, a signed phone, shutdown and `agent.log`.

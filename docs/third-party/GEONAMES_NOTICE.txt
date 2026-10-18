@@ -1,0 +1,13 @@
+Offline place names
+
+nexGallery bundles a reduced copy of the GeoNames "cities15000" data set
+(city name, country, coordinates rounded to 0.001 degrees and population in
+thousands) and the GeoNames country names.
+
+Source: GeoNames, https://www.geonames.org/
+License: Creative Commons Attribution 4.0 International (CC BY 4.0),
+https://creativecommons.org/licenses/by/4.0/
+
+The data was converted to a compact tab-separated, gzip-compressed file. No
+other changes were made. The data is provided "as is" without warranty of any
+kind.

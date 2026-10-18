@@ -1,0 +1,4 @@
+tags:
+  # 100,000-item catalogue budgets; about 10 seconds. Skip locally with
+  # `flutter test --exclude-tags performance`.
+  performance:

@@ -25,28 +25,31 @@ class _NexGalleryAppState extends State<NexGalleryApp> {
     _ownsModel = widget.model == null;
     _model = widget.model ?? NexGalleryRuntime(platform: widget.platform);
   }
+
   @override
   void dispose() {
     if (_ownsModel) (_model as NexGalleryRuntime).dispose();
     super.dispose();
   }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: _model,
     builder: (context, _) {
-    return MaterialApp(
-      title: 'nexGallery',
-      debugShowCheckedModeBanner: false,
-      themeMode: switch (_model.settings.appearance) {
-        GalleryAppearance.system => ThemeMode.system,
-        GalleryAppearance.light => ThemeMode.light,
-        GalleryAppearance.dark => ThemeMode.dark,
-      },
-      theme: _theme(Brightness.light),
-      darkTheme: _theme(Brightness.dark),
-      home: NexGalleryHome(platform: widget.platform, model: _model),
-    );
-  });
+      return MaterialApp(
+        title: 'nexGallery',
+        debugShowCheckedModeBanner: false,
+        themeMode: switch (_model.settings.appearance) {
+          GalleryAppearance.system => ThemeMode.system,
+          GalleryAppearance.light => ThemeMode.light,
+          GalleryAppearance.dark => ThemeMode.dark,
+        },
+        theme: _theme(Brightness.light),
+        darkTheme: _theme(Brightness.dark),
+        home: NexGalleryHome(platform: widget.platform, model: _model),
+      );
+    },
+  );
 
   ThemeData _theme(Brightness brightness) {
     final scheme = ColorScheme.fromSeed(

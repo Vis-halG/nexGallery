@@ -1,11 +1,15 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nex_gallery/core/catalog_models.dart';
 import 'package:nex_gallery/core/gallery_settings.dart';
+import 'package:nex_gallery/core/media_item.dart';
 import 'package:nex_gallery/data/gallery_preferences_store.dart';
+import 'package:nex_gallery/data/local_media_scanner.dart';
 import 'package:nex_gallery/data/sqlite_catalog_persistence.dart';
+import 'package:nex_gallery/services/files/recoverable_trash.dart';
 import 'package:nex_gallery/src/gallery_model.dart';
 import 'package:nex_gallery/src/gallery_runtime.dart';
 
@@ -74,31 +78,37 @@ void main() {
     },
   );
 
-  test(
-    'forgetting a folder removes catalogue trash and leaves originals intact',
-    () async {
-      await runtime.initialize();
-      final item = runtime.items.single;
-      await runtime.createAlbum('Family');
-      await runtime.addToAlbum(item, runtime.albums.single.id);
-      expect(await runtime.moveToTrash(item), isTrue);
-      runtime.showCollection(GalleryCollection.trash);
-      expect(runtime.items.single.id, item.id);
+  test('forgetting a folder removes catalogue trash and preserves physical recovery', () async {
+    await runtime.initialize();
+    final item = runtime.items.single;
+    await runtime.createAlbum('Family');
+    await runtime.addToAlbum(item, runtime.albums.single.id);
+    expect(await runtime.moveToTrash(item), isTrue);
+    runtime.showCollection(GalleryCollection.trash);
+    expect(runtime.items.single.id, item.id);
+    final trashed = runtime.items.single;
+    final payload = File.fromUri(Uri.parse(trashed.uri));
+    final journal = File(trashed.metadata.attributes['trash.journal']!);
+    final recoveryRecord = await journal.readAsString();
+    expect(await File('${media.path}/public.jpg').exists(), isFalse);
 
-      await runtime.removeWindowsFolder(media.path);
-      expect(runtime.windowsFolders, isEmpty);
-      expect(runtime.items, isEmpty);
-      final snapshot = await _snapshot(state);
-      expect(snapshot.items, isEmpty);
-      expect(snapshot.albums.single.itemIds, isEmpty);
-      expect(await File('${media.path}/public.jpg').readAsBytes(), <int>[
-        1,
-        2,
-        3,
-      ]);
-      expect((await _preferences(state)).roots, isEmpty);
-    },
-  );
+    await runtime.removeWindowsFolder(media.path);
+    expect(runtime.windowsFolders, isEmpty);
+    expect(runtime.items, isEmpty);
+    final snapshot = await _snapshot(state);
+    expect(snapshot.items, isEmpty);
+    expect(snapshot.albums.single.itemIds, isEmpty);
+    expect(await payload.readAsBytes(), <int>[1, 2, 3]);
+    expect(await journal.readAsString(), recoveryRecord);
+    expect((await _preferences(state)).roots, isEmpty);
+    await RecoverableTrash().restore(trashed);
+    await RecoverableTrash().finish(trashed);
+    expect(await File('${media.path}/public.jpg').readAsBytes(), <int>[
+      1,
+      2,
+      3,
+    ]);
+  });
 
   test('failed configuration write retains settings roots and organization', () async {
     await runtime.initialize();
@@ -166,6 +176,72 @@ void main() {
     expect(runtime.items.any((item) => item.uri.contains('/state/')), isFalse);
     expect((await _snapshot(state)).items, hasLength(1));
   });
+
+  test(
+    'stale original cannot delete a replacement after physical Trash',
+    () async {
+      await runtime.initialize();
+      final stale = runtime.items.single;
+      expect(await runtime.moveToTrash(stale), isTrue);
+      runtime.showCollection(GalleryCollection.trash);
+      final current = runtime.items.single;
+      final payload = File.fromUri(Uri.parse(current.uri));
+      final replacement = File.fromUri(Uri.parse(stale.uri));
+      const replacementBytes = <int>[99, 98, 97];
+      await replacement.writeAsBytes(replacementBytes);
+
+      expect(await runtime.deletePermanently(stale), isFalse);
+      expect(await replacement.readAsBytes(), replacementBytes);
+      expect(await payload.readAsBytes(), <int>[1, 2, 3]);
+      final snapshot = await _snapshot(state);
+      expect(snapshot.items.single.uri, current.uri);
+      expect(snapshot.items.single.section, MediaSection.trash);
+    },
+  );
+
+  test(
+    'shutdown during an unfinished scan preserves committed organization',
+    () async {
+      await runtime.initialize();
+      final original = runtime.items.single;
+      await runtime.toggleFavorite(original);
+      await runtime.createAlbum('Preserved');
+      await runtime.addToAlbum(original, runtime.albums.single.id);
+      final before = await _snapshot(state);
+      runtime.dispose();
+
+      final scanner = _GatedScanner();
+      runtime = NexGalleryRuntime(
+        platform: TargetPlatform.windows,
+        dataDirectory: state.path,
+        scanner: scanner,
+      );
+      var notifications = 0;
+      runtime.addListener(() => notifications++);
+      final opening = runtime.initialize();
+      await scanner.started.future;
+      runtime.dispose();
+      final notificationsAtShutdown = notifications;
+      scanner.result.complete(
+        ScanResult(
+          items: const <MediaItem>[],
+          issues: const <ScanIssue>[],
+          filesVisited: 0,
+          directoriesVisited: 1,
+          wasCancelled: false,
+          stoppedByLimit: false,
+        ),
+      );
+      await opening;
+      expect(notifications, notificationsAtShutdown);
+      expect((await _snapshot(state)).toJson(), before.toJson());
+      expect(await File('${media.path}/public.jpg').readAsBytes(), <int>[
+        1,
+        2,
+        3,
+      ]);
+    },
+  );
 }
 
 Future<void> _seedPreferences(
@@ -204,5 +280,24 @@ Future<CatalogSnapshot> _snapshot(Directory state) async {
     return await store.load();
   } finally {
     await store.close();
+  }
+}
+
+final class _GatedScanner implements LocalMediaScanner {
+  final started = Completer<void>();
+  final result = Completer<ScanResult>();
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<ScanResult> scan(
+    Iterable<String> rootPaths, {
+    ScanOptions? options,
+    ScanCancellationToken? cancellationToken,
+    void Function(ScanProgress progress)? onProgress,
+  }) {
+    if (!started.isCompleted) started.complete();
+    return result.future;
   }
 }

@@ -44,11 +44,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Collections'), findsOneWidget);
     expect(find.text('People'), findsOneWidget);
-    expect(find.text('Not installed'), findsOneWidget);
+    expect(find.text('Optional local AI pack'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.computer_outlined));
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('Connect securely'), findsOneWidget);
+    expect(find.text('Pair with your PC'), findsOneWidget);
     expect(find.text('Pair and connect'), findsOneWidget);
   });
 
@@ -291,8 +291,10 @@ final class _FakeGalleryModel extends ChangeNotifier implements GalleryModel {
   Future<void> removeWindowsFolder(String path) async {}
   @override
   Future<void> updateSettings(GallerySettings value) async {
-    _settings = value; notifyListeners();
+    _settings = value;
+    notifyListeners();
   }
+
   @override
   Future<void> openAccessSettings() async {}
   @override

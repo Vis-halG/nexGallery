@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/catalog_models.dart';
 import '../../core/media_item.dart';
 import '../../data/windows_files/windows_files_bridge.dart';
 import '../../src/gallery_model.dart';
+import '../../src/gallery_organizer.dart';
 import 'android_saf_browser.dart';
+import 'windows_file_browser.dart';
 import '../common/catalog_page_footer.dart';
 
 class FilesPage extends StatefulWidget {
@@ -67,6 +70,20 @@ class _FilesPageState extends State<FilesPage> {
                     if (widget.isWindows) ...[
                       const SizedBox(height: 18),
                       _folderInput(context),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                WindowsFileBrowser(model: widget.model),
+                          ),
+                        ),
+                        icon: const Icon(Icons.folder_open),
+                        label: const Text(
+                          'Browse folders · Copy, move and ZIP',
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -116,6 +133,8 @@ class _FilesPageState extends State<FilesPage> {
                       ),
                     ),
                     Text('${widget.model.items.length} shown'),
+                    if (widget.model is GalleryOrganizer)
+                      _SortButton(organizer: widget.model as GalleryOrganizer),
                   ],
                 ),
               ),
@@ -365,6 +384,48 @@ class _FilesPageState extends State<FilesPage> {
 
   double _padding(BuildContext context) =>
       MediaQuery.sizeOf(context).width < 600 ? 16 : 24;
+}
+
+class _SortButton extends StatelessWidget {
+  const _SortButton({required this.organizer});
+
+  final GalleryOrganizer organizer;
+
+  @override
+  Widget build(BuildContext context) {
+    const fields = <(CatalogSortField, String)>[
+      (CatalogSortField.takenAt, 'Date'),
+      (CatalogSortField.name, 'Name'),
+      (CatalogSortField.size, 'Size'),
+      (CatalogSortField.kind, 'Type'),
+      (CatalogSortField.modifiedAt, 'Date modified'),
+    ];
+    return PopupMenuButton<(CatalogSortField, CatalogSortDirection)>(
+      tooltip: 'Sort items',
+      icon: const Icon(Icons.sort_rounded),
+      onSelected: (value) => organizer.setSort(value.$1, value.$2),
+      itemBuilder: (_) => [
+        for (final (field, label) in fields)
+          for (final direction in CatalogSortDirection.values)
+            CheckedPopupMenuItem(
+              value: (field, direction),
+              checked:
+                  organizer.sortField == field &&
+                  organizer.sortDirection == direction,
+              child: Text(
+                '$label ${switch ((field, direction)) {
+                  (CatalogSortField.name, CatalogSortDirection.ascending) => 'A to Z',
+                  (CatalogSortField.name, _) => 'Z to A',
+                  (CatalogSortField.size, CatalogSortDirection.ascending) => 'smallest first',
+                  (CatalogSortField.size, _) => 'largest first',
+                  (_, CatalogSortDirection.ascending) => 'oldest first',
+                  _ => 'newest first',
+                }}',
+              ),
+            ),
+      ],
+    );
+  }
 }
 
 class _NoFilesCard extends StatelessWidget {

@@ -1,7 +1,18 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Required only for encrypted phone-to-PC remote access. User media is
          never sent to a nexGallery cloud storage service. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets transfers honor Wi-Fi-only and mobile-data preferences. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Used only when the user chooses "Set as wallpaper". -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <!-- Asks for a fingerprint, face or screen-lock PIN before emptying Trash
+         or another action that cannot be undone. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Only for updates downloaded from this app's GitHub releases, after their
+         checksum is verified. Builds for Google Play must not include it. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Android 13+ grants media access per collection. Android 14 can grant
          access to only the photos and videos selected by the user. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -17,10 +28,8 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
-    <!-- Current PC endpoints use authenticated HTTP inside a trusted LAN or
-         private Tailscale/WireGuard network. Never expose that server directly
-         to the public internet; transport TLS remains required before
-         public-network endpoints are supported. -->
+    <!-- Phone-to-PC traffic uses pinned HTTPS. Cleartext is needed by the
+         native video player only for the authenticated loopback stream proxy. -->
     <application
         android:label="nexGallery"
         android:name="${applicationName}"
@@ -51,6 +60,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- The pairing scanner follows the phone orientation. The camera is used
+             only while the user scans a PC pairing code. -->
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:screenOrientation="fullSensor"
+            tools:replace="screenOrientation" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

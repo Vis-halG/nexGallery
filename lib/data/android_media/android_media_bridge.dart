@@ -569,6 +569,16 @@ class AndroidMediaBridge {
     return AndroidThumbnail.fromMap(value);
   }
 
+  /// Decodes the original photo to at most [size] pixels on its longer side,
+  /// up to 4096, for the full-screen viewer. EXIF orientation is applied.
+  Future<AndroidThumbnail> loadPreview(Uri uri, {int size = 2048}) async {
+    final value = await _invokeMap('loadPreview', <String, Object>{
+      'uri': uri.toString(),
+      'size': size,
+    });
+    return AndroidThumbnail.fromMap(value);
+  }
+
   /// Opens Android's mandatory confirmation UI on scoped-storage versions.
   Future<AndroidMediaOperationResult> deleteMedia(Iterable<Uri> uris) async {
     final value = await _invokeMap('deleteMedia', <String, Object>{
@@ -728,6 +738,62 @@ class AndroidMediaBridge {
       'uri': uri.toString(),
     });
     return AndroidDocumentMutationResult.fromMap(value);
+  }
+
+  Future<String> exportAppMedia(
+    String path, {
+    required String name,
+    required String mimeType,
+  }) async {
+    final value = await _invokeMap('exportAppMedia', {
+      'path': path,
+      'name': name,
+      'mimeType': mimeType,
+    });
+    return value['uri'] as String;
+  }
+
+  Future<AndroidDocumentMutationResult> copyDocument(
+    Uri uri,
+    Uri parentUri, {
+    bool move = false,
+  }) async => AndroidDocumentMutationResult.fromMap(
+    await _invokeMap('copyDocument', {
+      'uri': uri.toString(),
+      'parentUri': parentUri.toString(),
+      'move': move,
+    }),
+  );
+
+  Future<AndroidDocumentMutationResult> exportAppFile(
+    String path,
+    Uri parentUri, {
+    required String name,
+    String mimeType = 'application/octet-stream',
+  }) async => AndroidDocumentMutationResult.fromMap(
+    await _invokeMap('exportAppFile', {
+      'path': path,
+      'parentUri': parentUri.toString(),
+      'name': name,
+      'mimeType': mimeType,
+    }),
+  );
+
+  Future<void> archiveDocument(
+    Uri source,
+    Uri parent,
+    String name, {
+    bool extract = false,
+  }) async {
+    await _invokeMap(extract ? 'extractDocument' : 'zipDocument', {
+      'uri': source.toString(),
+      'parentUri': parent.toString(),
+      'name': name,
+    });
+  }
+
+  Future<void> setPrivacyScreen(bool enabled) async {
+    await _invokeMap('setPrivacyScreen', {'enabled': enabled});
   }
 
   /// Encrypts a small credential with an AES-256-GCM key held by Android

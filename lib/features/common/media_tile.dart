@@ -20,6 +20,9 @@ class MediaTile extends StatelessWidget {
     required this.item,
     required this.model,
     required this.onAction,
+    this.onSelect,
+    this.selectionMode = false,
+    this.selected = false,
     super.key,
   });
 
@@ -27,65 +30,96 @@ class MediaTile extends StatelessWidget {
   final GalleryModel model;
   final ValueChanged<MediaTileAction> onAction;
 
+  /// Toggles multi-selection. Long press starts it; taps toggle while active.
+  final VoidCallback? onSelect;
+  final bool selectionMode;
+  final bool selected;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Semantics(
       button: true,
+      selected: selectionMode ? selected : null,
       label:
           '${item.name}, ${_kindLabel(item.kind)}'
           '${item.isAvailable ? '' : ', drive unavailable'}',
       child: Card(
         clipBehavior: Clip.antiAlias,
+        shape: selected
+            ? RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: scheme.primary, width: 3),
+              )
+            : null,
         child: InkWell(
-          onTap: () => onAction(MediaTileAction.open),
+          onTap: selectionMode && onSelect != null
+              ? onSelect
+              : () => onAction(MediaTileAction.open),
+          onLongPress: onSelect,
           child: Stack(
             fit: StackFit.expand,
             children: [
-              MediaThumbnail(item: item, model: model),
+              AnimatedPadding(
+                duration: const Duration(milliseconds: 120),
+                padding: EdgeInsets.all(selected ? 8 : 0),
+                child: MediaThumbnail(item: item, model: model),
+              ),
               Positioned(
                 top: 6,
                 left: 6,
-                child: _SourceBadge(source: item.source),
-              ),
-              Positioned(
-                top: 2,
-                right: 2,
-                child: PopupMenuButton<MediaTileAction>(
-                  tooltip: 'Actions for ${item.name}',
-                  onSelected: onAction,
-                  itemBuilder: (context) => _actions(item)
-                      .map(
-                        (entry) => PopupMenuItem<MediaTileAction>(
-                          value: entry.$1,
-                          enabled:
-                              item.isAvailable ||
-                              entry.$1 == MediaTileAction.open ||
-                              entry.$1 == MediaTileAction.favorite ||
-                              entry.$1 == MediaTileAction.addToAlbum ||
-                              entry.$1 == MediaTileAction.archive,
-                          child: Row(
-                            children: [
-                              Icon(entry.$2, size: 20),
-                              const SizedBox(width: 12),
-                              Text(entry.$3),
-                            ],
-                          ),
-                        ),
+                child: selectionMode
+                    ? Icon(
+                        selected
+                            ? Icons.check_circle_rounded
+                            : Icons.radio_button_unchecked_rounded,
+                        color: selected ? scheme.primary : Colors.white,
+                        shadows: const [Shadow(blurRadius: 4)],
                       )
-                      .toList(growable: false),
-                  icon: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: scheme.scrim.withValues(alpha: 0.54),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(5),
-                      child: Icon(Icons.more_vert_rounded, color: Colors.white),
+                    : _SourceBadge(source: item.source),
+              ),
+              if (!selectionMode)
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: PopupMenuButton<MediaTileAction>(
+                    tooltip: 'Actions for ${item.name}',
+                    onSelected: onAction,
+                    itemBuilder: (context) => _actions(item)
+                        .map(
+                          (entry) => PopupMenuItem<MediaTileAction>(
+                            value: entry.$1,
+                            enabled:
+                                item.isAvailable ||
+                                entry.$1 == MediaTileAction.open ||
+                                entry.$1 == MediaTileAction.favorite ||
+                                entry.$1 == MediaTileAction.addToAlbum ||
+                                entry.$1 == MediaTileAction.archive,
+                            child: Row(
+                              children: [
+                                Icon(entry.$2, size: 20),
+                                const SizedBox(width: 12),
+                                Text(entry.$3),
+                              ],
+                            ),
+                          ),
+                        )
+                        .toList(growable: false),
+                    icon: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: scheme.scrim.withValues(alpha: 0.54),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(5),
+                        child: Icon(
+                          Icons.more_vert_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
               Positioned(
                 left: 0,
                 right: 0,
@@ -182,7 +216,8 @@ class MediaThumbnail extends StatefulWidget {
     required this.item,
     required this.model,
     this.fit = BoxFit.cover,
-    this.size = 384,
+    this.size,
+    this.sharpenTo,
     this.showFailureMessage = false,
     super.key,
   });
@@ -190,21 +225,25 @@ class MediaThumbnail extends StatefulWidget {
   final MediaItem item;
   final GalleryModel model;
   final BoxFit fit;
-  final int size;
+
+  /// Longest side to request in pixels; null matches the space on screen.
+  final int? size;
+
+  /// After [size] has loaded, also loads this many pixels and swaps in the
+  /// sharper image, so the quick preview appears first.
+  final int? sharpenTo;
   final bool showFailureMessage;
 
   @override
   State<MediaThumbnail> createState() => _MediaThumbnailState();
 }
 
-class _MediaThumbnailState extends State<MediaThumbnail> {
-  late Future<Uint8List?> _future;
+/// Thumbnail sizes, so neighbouring tiles share cached decodes.
+const _thumbnailSizes = <int>[256, 384, 512, 768, 1024];
 
-  @override
-  void initState() {
-    super.initState();
-    _future = _load();
-  }
+class _MediaThumbnailState extends State<MediaThumbnail> {
+  Future<Uint8List?>? _future;
+  var _loadedSize = 0;
 
   @override
   void didUpdateWidget(covariant MediaThumbnail oldWidget) {
@@ -213,15 +252,52 @@ class _MediaThumbnailState extends State<MediaThumbnail> {
         oldWidget.item.uri != widget.item.uri ||
         oldWidget.item.metadata.modifiedAt != widget.item.metadata.modifiedAt ||
         oldWidget.item.isAvailable != widget.item.isAvailable ||
-        oldWidget.size != widget.size ||
         oldWidget.model != widget.model) {
-      _future = _load();
+      _future = null;
+      _loadedSize = 0;
+      return;
+    }
+    // A page that becomes the open photo asks for the sharper image once
+    // its quick preview has loaded.
+    final sharper = widget.sharpenTo;
+    final current = _future;
+    if (current != null && sharper != null && sharper > _loadedSize) {
+      current.then((_) {
+        if (mounted && identical(current, _future) && sharper > _loadedSize) {
+          setState(() => _ensureLoaded(sharper));
+        }
+      }, onError: (Object _) {});
     }
   }
 
-  Future<Uint8List?> _load() => widget.item.isAvailable
-      ? widget.model.loadThumbnail(widget.item, size: widget.size)
-      : Future<Uint8List?>.value();
+  /// Requests more pixels when the tile or the viewer grows; the current
+  /// image stays visible until the sharper one arrives.
+  void _ensureLoaded(int size) {
+    if (_future != null && size <= _loadedSize) return;
+    _loadedSize = size;
+    final future = _future = widget.item.isAvailable
+        ? widget.model.loadThumbnail(widget.item, size: size)
+        : Future<Uint8List?>.value();
+    future.then((_) {
+      final sharper = widget.sharpenTo;
+      if (!mounted || sharper == null || sharper <= _loadedSize) return;
+      if (!identical(future, _future)) return;
+      setState(() => _ensureLoaded(sharper));
+    }, onError: (Object _) {});
+  }
+
+  int _sizeFor(BoxConstraints constraints) {
+    final explicit = widget.size;
+    if (explicit != null) return explicit;
+    final ratio = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 0.0;
+    final height = constraints.hasBoundedHeight ? constraints.maxHeight : 0.0;
+    final needed = (width > height ? width : height) * ratio;
+    return _thumbnailSizes.firstWhere(
+      (size) => size >= needed,
+      orElse: () => _thumbnailSizes.last,
+    );
+  }
 
   Widget _placeholder() => _MediaPlaceholder(
     kind: widget.item.kind,
@@ -234,6 +310,15 @@ class _MediaThumbnailState extends State<MediaThumbnail> {
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _ensureLoaded(_sizeFor(constraints));
+        return _image(context);
+      },
+    );
+  }
+
+  Widget _image(BuildContext context) {
     return FutureBuilder<Uint8List?>(
       future: _future,
       builder: (context, snapshot) {
@@ -243,7 +328,7 @@ class _MediaThumbnailState extends State<MediaThumbnail> {
             bytes,
             fit: widget.fit,
             gaplessPlayback: true,
-            filterQuality: FilterQuality.low,
+            filterQuality: FilterQuality.medium,
             errorBuilder: (_, _, _) => _placeholder(),
           );
         }

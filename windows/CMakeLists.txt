@@ -102,6 +102,13 @@ install(CODE "
 install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
 
+# Background PC server agent, built by `dart run tool/build_server.dart`.
+# The app finds it next to its own executable.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/server/build/nexgallery_server.exe"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime
+  OPTIONAL)
+
 # Install the AOT library on non-Debug builds only.
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release

@@ -25,8 +25,10 @@ final class MediaCatalogRepository {
   }) async {
     final selectedPersistence =
         persistence ??
-        createCatalogPersistence(databaseFilePath: databaseFilePath,
-          legacyJsonFilePath: legacyJsonFilePath);
+        createCatalogPersistence(
+          databaseFilePath: databaseFilePath,
+          legacyJsonFilePath: legacyJsonFilePath,
+        );
     final snapshot = await selectedPersistence.load();
     return MediaCatalogRepository._(
       persistence: selectedPersistence,
@@ -190,16 +192,23 @@ final class MediaCatalogRepository {
       for (final item in scannedItems)
         if (item.id.isNotEmpty && item.source == source) item.id: item,
     };
+    _adoptMovedItems(source, incoming, removeMissing: removeMissing);
     for (final entry in incoming.entries) {
       final existing = _items[entry.key];
-      _items[entry.key] = existing == null
-          ? entry.value
-          : entry.value.copyWith(
-              section: existing.section,
-              isFavorite: existing.isFavorite,
-              thumbnailUri: existing.thumbnailUri,
-              deletedAt: existing.deletedAt,
-            );
+      if (existing == null) {
+        _items[entry.key] = entry.value;
+        continue;
+      }
+      final merged = entry.value.copyWith(
+        indexedAt: existing.indexedAt,
+        section: existing.section,
+        isFavorite: existing.isFavorite,
+        thumbnailUri: existing.thumbnailUri,
+        deletedAt: existing.deletedAt,
+        metadata: _mergeMetadata(existing, entry.value),
+      );
+      // An unchanged file keeps its object, so the save skips it.
+      _items[entry.key] = sameMediaItem(existing, merged) ? existing : merged;
     }
     final staleIds = _items.values
         .where(
@@ -226,7 +235,7 @@ final class MediaCatalogRepository {
     for (final incoming in items) {
       if (incoming.id.isEmpty) continue;
       final existing = _items[incoming.id];
-      _items[incoming.id] = existing == null || !preserveUserState
+      final merged = existing == null || !preserveUserState
           ? incoming
           : incoming.copyWith(
               section: existing.section,
@@ -234,7 +243,212 @@ final class MediaCatalogRepository {
               thumbnailUri: existing.thumbnailUri,
               deletedAt: existing.deletedAt,
             );
+      _items[incoming.id] = existing != null && sameMediaItem(existing, merged)
+          ? existing
+          : merged;
     }
+  });
+
+  /// Item ids follow paths, so a renamed or moved file would arrive as a new
+  /// item. It keeps its favorite, albums, Archive/Trash state and edits when
+  /// it is the same file: on one drive the Windows file ID matches; across
+  /// drives its name, size and modification time match exactly one missing
+  /// file. Incomplete scans copy organization instead of moving it, because
+  /// an unseen original may still exist.
+  void _adoptMovedItems(
+    MediaSource source,
+    Map<String, MediaItem> incoming, {
+    required bool removeMissing,
+  }) {
+    final fresh = [
+      for (final item in incoming.values)
+        if (!_items.containsKey(item.id)) item,
+    ];
+    if (fresh.isEmpty) return;
+    final missing = [
+      for (final item in _items.values)
+        if (item.source == source &&
+            item.section != MediaSection.trash &&
+            !incoming.containsKey(item.id))
+          item,
+    ];
+    if (missing.isEmpty) return;
+    final byIdentity = <String, MediaItem>{
+      for (final item in missing)
+        ?item.metadata.attributes['fileIdentity']: item,
+    };
+    String shape(MediaItem item) =>
+        '${item.name.toLowerCase()}|${item.metadata.sizeBytes}|'
+        '${item.metadata.modifiedAt.toUtc().microsecondsSinceEpoch}';
+    final missingByShape = <String, List<MediaItem>>{};
+    final freshByShape = <String, int>{};
+    if (removeMissing) {
+      for (final item in missing) {
+        missingByShape.putIfAbsent(shape(item), () => []).add(item);
+      }
+      for (final item in fresh) {
+        freshByShape.update(shape(item), (n) => n + 1, ifAbsent: () => 1);
+      }
+    }
+    final adopted = <String>{};
+    for (final item in fresh) {
+      var previous = switch (item.metadata.attributes['fileIdentity']) {
+        final identity? => byIdentity[identity],
+        null => null,
+      };
+      if (previous != null &&
+          previous.metadata.sizeBytes != item.metadata.sizeBytes) {
+        previous = null;
+      }
+      if (previous == null) {
+        final candidates = missingByShape[shape(item)];
+        if (candidates != null &&
+            candidates.length == 1 &&
+            freshByShape[shape(item)] == 1) {
+          previous = candidates.single;
+        }
+      }
+      if (previous == null || !adopted.add(previous.id)) continue;
+      final history = [
+        ...?previous.metadata.attributes[movedFromAttribute]
+            ?.split(',')
+            .where((id) => id.isNotEmpty),
+        previous.id,
+      ];
+      final merged = _mergeMetadata(previous, item);
+      _items[item.id] = item.copyWith(
+        section: previous.section,
+        isFavorite: previous.isFavorite,
+        deletedAt: previous.deletedAt,
+        metadata: merged.copyWith(
+          attributes: {
+            ...merged.attributes,
+            movedFromAttribute: history
+                .skip(history.length > 5 ? history.length - 5 : 0)
+                .join(','),
+          },
+        ),
+      );
+      final now = DateTime.now().toUtc();
+      for (final entry in _albums.entries.toList(growable: false)) {
+        final album = entry.value;
+        if (!album.itemIds.contains(previous.id)) continue;
+        _albums[entry.key] = album.copyWith(
+          itemIds: removeMissing
+              ? album.itemIds.map((id) => id == previous!.id ? item.id : id)
+              : [...album.itemIds, item.id],
+          coverItemId: removeMissing && album.coverItemId == previous.id
+              ? item.id
+              : album.coverItemId,
+          updatedAt: now,
+        );
+      }
+      if (removeMissing) _items.remove(previous.id);
+    }
+  }
+
+  /// Earlier ids of a moved item, oldest first, so local analysis can carry
+  /// its faces and indexes over.
+  static const movedFromAttribute = 'analysis.movedFrom';
+
+  MediaMetadata _mergeMetadata(MediaItem existing, MediaItem incoming) {
+    final old = existing.metadata, fresh = incoming.metadata;
+    final unchanged =
+        old.sizeBytes == fresh.sizeBytes && old.modifiedAt == fresh.modifiedAt;
+    return withUserOverrides(
+      fresh.copyWith(
+        latitude: fresh.latitude ?? (unchanged ? old.latitude : null),
+        longitude: fresh.longitude ?? (unchanged ? old.longitude : null),
+        tags: {...fresh.tags, ...old.tags},
+        attributes: {
+          for (final entry in old.attributes.entries)
+            if (entry.key.startsWith('user.') ||
+                (unchanged && entry.key.startsWith('analysis.')))
+              entry.key: entry.value,
+          ...fresh.attributes,
+        },
+      ),
+    );
+  }
+
+  /// Forgets catalogue entries whose originals were deleted by the caller.
+  Future<int> removeItems(Iterable<String> itemIds) => _mutate<int>(() {
+    var count = 0;
+    for (final id in itemIds.toSet()) {
+      if (_items.remove(id) == null) continue;
+      _removeItemFromEveryAlbum(id);
+      count++;
+    }
+    return count;
+  });
+
+  /// Applies one catalogue-only change to many items in a single save.
+  Future<int> updateItems(
+    Iterable<String> itemIds,
+    MediaItem Function(MediaItem item) update,
+  ) => _mutate<int>(() {
+    var count = 0;
+    for (final id in itemIds.toSet()) {
+      final item = _items[id];
+      if (item == null) continue;
+      _items[id] = update(item);
+      count++;
+    }
+    return count;
+  });
+
+  /// Restores exported organization onto items that still exist. Unknown items
+  /// are skipped; albums are merged by identifier without dropping members.
+  Future<int> restoreOrganization({
+    required Iterable<MediaAlbum> albums,
+    required Map<String, OrganizationRecord> items,
+  }) => _mutate<int>(() {
+    var restored = 0;
+    for (final entry in items.entries) {
+      final item = _items[entry.key];
+      if (item == null) continue;
+      final value = entry.value;
+      _items[entry.key] = item.copyWith(
+        isFavorite: value.favorite || item.isFavorite,
+        section:
+            item.section == MediaSection.library &&
+                value.section == MediaSection.archive
+            ? MediaSection.archive
+            : item.section,
+        metadata: withUserOverrides(
+          item.metadata.copyWith(
+            attributes: {
+              ...item.metadata.attributes,
+              for (final attribute in value.attributes.entries)
+                if (attribute.key.startsWith('user.'))
+                  attribute.key: attribute.value,
+            },
+          ),
+        ),
+      );
+      restored++;
+    }
+    final now = DateTime.now().toUtc();
+    for (final album in albums) {
+      if (album.id.isEmpty || album.name.trim().isEmpty) continue;
+      final members = album.itemIds.where(_items.containsKey);
+      final existing = _albums[album.id];
+      if (existing != null && existing.isReadOnly) continue;
+      _albums[album.id] = existing == null
+          ? album.copyWith(
+              itemIds: members,
+              coverItemId: _items.containsKey(album.coverItemId)
+                  ? album.coverItemId
+                  : null,
+              isReadOnly: false,
+              updatedAt: now,
+            )
+          : existing.copyWith(
+              itemIds: {...existing.itemIds, ...members},
+              updatedAt: now,
+            );
+    }
+    return restored;
   });
 
   Future<void> setFavorite(String itemId, bool value) => _mutate<void>(() {
@@ -409,8 +623,12 @@ final class MediaCatalogRepository {
         if (!_changes.isClosed) _changes.add(updated);
         completer.complete(result);
       } catch (error, stackTrace) {
-        _items..clear()..addAll(previousItems);
-        _albums..clear()..addAll(previousAlbums);
+        _items
+          ..clear()
+          ..addAll(previousItems);
+        _albums
+          ..clear()
+          ..addAll(previousAlbums);
         completer.completeError(error, stackTrace);
       }
     });

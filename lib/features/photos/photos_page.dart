@@ -1,18 +1,34 @@
 import 'package:flutter/material.dart';
 
+import '../../core/catalog_models.dart';
 import '../../core/media_item.dart';
+import '../../services/remote/remote_session.dart';
+import '../../services/remote/security.dart';
 import '../../src/gallery_model.dart';
+import '../../src/gallery_organizer.dart';
+import '../../src/gallery_tools.dart';
+import '../common/dialogs.dart';
 import '../common/media_tile.dart';
 import '../common/catalog_page_footer.dart';
+import '../editing/collage_page.dart';
+import '../library/memories_page.dart';
 import 'media_viewer.dart';
 
 class PhotosPage extends StatefulWidget {
-  const PhotosPage({required this.model, required this.isDesktop,
-    this.onOpenSettings, super.key});
+  const PhotosPage({
+    required this.model,
+    required this.isDesktop,
+    this.onOpenSettings,
+    this.remoteSession,
+    super.key,
+  });
 
   final GalleryModel model;
   final bool isDesktop;
   final VoidCallback? onOpenSettings;
+
+  /// Enables "Send to PC" for selections when the phone is paired.
+  final RemoteSession? remoteSession;
 
   @override
   State<PhotosPage> createState() => _PhotosPageState();
@@ -20,7 +36,17 @@ class PhotosPage extends StatefulWidget {
 
 class _PhotosPageState extends State<PhotosPage> {
   final _searchController = TextEditingController();
+  final _selected = <String>{};
   double _gridScale = 1;
+  bool _busy = false;
+
+  GalleryOrganizer? get _organizer => widget.model is GalleryOrganizer
+      ? widget.model as GalleryOrganizer
+      : null;
+
+  List<MediaItem> get _selectedItems => widget.model.items
+      .where((item) => _selected.contains(item.id))
+      .toList(growable: false);
 
   @override
   void dispose() {
@@ -28,59 +54,271 @@ class _PhotosPageState extends State<PhotosPage> {
     super.dispose();
   }
 
+  void _toggle(MediaItem item) => setState(() {
+    if (!_selected.remove(item.id)) _selected.add(item.id);
+  });
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: widget.model,
       builder: (context, _) {
-        return SafeArea(
-          child: RefreshIndicator(
-            onRefresh: widget.model.refresh,
-            child: CustomScrollView(
-              key: const PageStorageKey('photos-timeline'),
-              physics: const AlwaysScrollableScrollPhysics(),
-              slivers: [
-                SliverPadding(
-                  padding: EdgeInsets.fromLTRB(
-                    _pagePadding(context),
-                    18,
-                    _pagePadding(context),
-                    12,
-                  ),
-                  sliver: SliverToBoxAdapter(child: _header(context)),
-                ),
-                SliverPadding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: _pagePadding(context),
-                  ),
-                  sliver: SliverToBoxAdapter(child: _filters(context)),
-                ),
-                if (widget.model.isIndexing)
+        _selected.retainAll(widget.model.items.map((item) => item.id));
+        // Library pages (Smart search, Places) can set the query directly.
+        if (_searchController.text != widget.model.searchText) {
+          _searchController.text = widget.model.searchText;
+        }
+        final selecting = _selected.isNotEmpty;
+        return PopScope(
+          canPop: !selecting,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop && selecting) setState(_selected.clear);
+          },
+          child: SafeArea(
+            child: RefreshIndicator(
+              onRefresh: widget.model.refresh,
+              child: CustomScrollView(
+                key: const PageStorageKey('photos-timeline'),
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
                   SliverPadding(
                     padding: EdgeInsets.fromLTRB(
                       _pagePadding(context),
-                      8,
+                      18,
                       _pagePadding(context),
-                      0,
+                      12,
                     ),
                     sliver: SliverToBoxAdapter(
-                      child: _IndexProgress(model: widget.model),
+                      child: selecting
+                          ? _selectionBar(context)
+                          : _header(context),
                     ),
                   ),
-                ..._content(context),
-                if (widget.model.items.isNotEmpty &&
-                    (widget.model.loadState == GalleryLoadState.ready ||
-                        widget.model.loadState == GalleryLoadState.loading))
-                  SliverToBoxAdapter(
-                    child: CatalogPageFooter(model: widget.model),
+                  SliverPadding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: _pagePadding(context),
+                    ),
+                    sliver: SliverToBoxAdapter(child: _filters(context)),
                   ),
-                const SliverPadding(padding: EdgeInsets.only(bottom: 96)),
-              ],
+                  if (_showMemories)
+                    SliverToBoxAdapter(
+                      child: MemoryCarousel(
+                        model: widget.model,
+                        padding: _pagePadding(context),
+                      ),
+                    ),
+                  if (widget.model.isIndexing)
+                    SliverPadding(
+                      padding: EdgeInsets.fromLTRB(
+                        _pagePadding(context),
+                        8,
+                        _pagePadding(context),
+                        0,
+                      ),
+                      sliver: SliverToBoxAdapter(
+                        child: _IndexProgress(model: widget.model),
+                      ),
+                    ),
+                  ..._content(context),
+                  if (widget.model.items.isNotEmpty &&
+                      (widget.model.loadState == GalleryLoadState.ready ||
+                          widget.model.loadState == GalleryLoadState.loading))
+                    SliverToBoxAdapter(
+                      child: CatalogPageFooter(model: widget.model),
+                    ),
+                  const SliverPadding(padding: EdgeInsets.only(bottom: 96)),
+                ],
+              ),
             ),
           ),
         );
       },
     );
+  }
+
+  bool get _showMemories {
+    final organizer = _organizer;
+    return organizer != null &&
+        widget.model.collection == GalleryCollection.timeline &&
+        widget.model.searchText.isEmpty &&
+        organizer.activeAlbumId == null &&
+        _selected.isEmpty &&
+        organizer.memories.isNotEmpty;
+  }
+
+  Widget _selectionBar(BuildContext context) {
+    final organizer = _organizer!;
+    final items = _selectedItems;
+    final inTrash = widget.model.collection == GalleryCollection.trash;
+    final albumId = organizer.activeAlbumId;
+    final images = items.where((item) => item.kind == MediaKind.image).length;
+    return Row(
+      children: [
+        IconButton(
+          tooltip: 'Clear selection',
+          onPressed: () => setState(_selected.clear),
+          icon: const Icon(Icons.close_rounded),
+        ),
+        Expanded(
+          child: Text(
+            '${items.length} selected',
+            style: Theme.of(context).textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.w800),
+          ),
+        ),
+        if (_busy)
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        IconButton(
+          tooltip: 'Select all loaded',
+          onPressed: () => setState(
+            () => _selected.addAll(widget.model.items.map((item) => item.id)),
+          ),
+          icon: const Icon(Icons.select_all_rounded),
+        ),
+        if (!inTrash) ...[
+          IconButton(
+            tooltip: 'Share selected',
+            onPressed: _busy ? null : () => _batch(organizer.shareAll(items)),
+            icon: const Icon(Icons.share_rounded),
+          ),
+          IconButton(
+            tooltip: 'Move selected to Trash',
+            onPressed: _busy
+                ? null
+                : () => _batch(() async {
+                    final moved = await organizer.moveAllToTrash(items);
+                    if (mounted) {
+                      showMessage(this.context, '$moved moved to Trash');
+                    }
+                  }()),
+            icon: const Icon(Icons.delete_outline_rounded),
+          ),
+        ],
+        PopupMenuButton<String>(
+          tooltip: 'More actions for selection',
+          enabled: !_busy,
+          onSelected: (action) => _selectionAction(action, items),
+          itemBuilder: (_) => [
+            if (!inTrash) ...[
+              const PopupMenuItem(value: 'favorite', child: Text('Favorite')),
+              const PopupMenuItem(
+                value: 'unfavorite',
+                child: Text('Remove favorite'),
+              ),
+              const PopupMenuItem(value: 'album', child: Text('Add to album')),
+              if (albumId != null)
+                const PopupMenuItem(
+                  value: 'remove-album',
+                  child: Text('Remove from this album'),
+                ),
+              const PopupMenuItem(value: 'archive', child: Text('Archive')),
+              if (widget.model is GalleryTools && images >= 2 && images <= 9)
+                const PopupMenuItem(
+                  value: 'collage',
+                  child: Text('Create collage'),
+                ),
+              const PopupMenuItem(value: 'slideshow', child: Text('Slideshow')),
+              if (widget.remoteSession?.allows(DeviceScope.upload) == true)
+                const PopupMenuItem(value: 'send', child: Text('Send to PC')),
+            ] else
+              const PopupMenuItem(value: 'restore', child: Text('Restore')),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _batch(Future<void> operation) async {
+    setState(() => _busy = true);
+    try {
+      await operation;
+      if (mounted) setState(_selected.clear);
+    } catch (error) {
+      if (mounted) showMessage(context, friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _selectionAction(String action, List<MediaItem> items) async {
+    final organizer = _organizer!;
+    switch (action) {
+      case 'favorite':
+        await _batch(organizer.setFavorites(items, true));
+      case 'unfavorite':
+        await _batch(organizer.setFavorites(items, false));
+      case 'archive':
+        await _batch(organizer.archiveAll(items));
+      case 'remove-album':
+        await _batch(
+          organizer.removeFromAlbum(organizer.activeAlbumId!, items),
+        );
+      case 'album':
+        final picked = await pickAlbum(
+          context,
+          widget.model.albums,
+          createAlbum: widget.model.createAlbum,
+        );
+        final albumId = resolvePickedAlbum(picked, widget.model.albums);
+        if (albumId != null && mounted) {
+          await _batch(organizer.addAllToAlbum(items, albumId));
+          if (mounted) showMessage(context, 'Added ${itemCount(items.length)}');
+        }
+      case 'restore':
+        await _batch(() async {
+          for (final item in items) {
+            await widget.model.restore(item);
+          }
+        }());
+      case 'collage':
+        await Navigator.push<void>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CollagePage(
+              model: widget.model,
+              tools: widget.model as GalleryTools,
+              items: items
+                  .where((item) => item.kind == MediaKind.image)
+                  .toList(),
+            ),
+          ),
+        );
+        if (mounted) setState(_selected.clear);
+      case 'slideshow':
+        await _showViewer(items.first, items: items, slideshow: true);
+      case 'send':
+        await _batch(() async {
+          final added = await widget.remoteSession!.sendToPc(items);
+          if (mounted) {
+            showMessage(context, '$added items added to Transfers');
+          }
+        }());
+    }
+  }
+
+  Future<void> _emptyTrash() async {
+    final organizer = _organizer;
+    if (organizer == null) return;
+    final confirmed = await confirmIrreversible(
+      context,
+      title: 'Empty Trash?',
+      message: 'Everything in Trash will be deleted permanently. This cannot be undone.',
+      action: 'Empty Trash',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final deleted = await organizer.emptyTrash();
+      if (mounted) showMessage(context, '${itemCount(deleted)} deleted');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Widget _header(BuildContext context) {
@@ -102,7 +340,7 @@ class _PhotosPageState extends State<PhotosPage> {
             Text(
               widget.model.items.isEmpty
                   ? 'Private, local and organized'
-                  : '${widget.model.totalItemCount} items',
+                  : itemCount(widget.model.totalItemCount),
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -133,8 +371,11 @@ class _PhotosPageState extends State<PhotosPage> {
             ),
             if (widget.onOpenSettings != null) ...[
               const SizedBox(width: 8),
-              IconButton.filledTonal(tooltip: 'Settings', onPressed: widget.onOpenSettings,
-                icon: const Icon(Icons.settings_outlined)),
+              IconButton.filledTonal(
+                tooltip: 'Settings',
+                onPressed: widget.onOpenSettings,
+                icon: const Icon(Icons.settings_outlined),
+              ),
             ],
           ],
         ),
@@ -148,7 +389,7 @@ class _PhotosPageState extends State<PhotosPage> {
       children: [
         SearchBar(
           controller: _searchController,
-          hintText: 'Search filename, folder or type',
+          hintText: 'Search names, places, people, things or text',
           leading: const Icon(Icons.search_rounded),
           trailing: [
             if (_searchController.text.isNotEmpty)
@@ -182,8 +423,42 @@ class _PhotosPageState extends State<PhotosPage> {
             ],
           ),
         ),
+        if (_activeAlbum case final album?)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: InputChip(
+                avatar: const Icon(Icons.photo_album_rounded, size: 18),
+                label: Text('Album: ${album.name}'),
+                deleteButtonTooltipMessage: 'Show the whole timeline',
+                onDeleted: () =>
+                    widget.model.showCollection(GalleryCollection.timeline),
+              ),
+            ),
+          ),
+        if (_organizer != null &&
+            widget.model.collection == GalleryCollection.trash &&
+            widget.model.items.isNotEmpty)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _busy ? null : _emptyTrash,
+              icon: const Icon(Icons.delete_forever_rounded),
+              label: const Text('Empty Trash'),
+            ),
+          ),
       ],
     );
+  }
+
+  MediaAlbum? get _activeAlbum {
+    final id = _organizer?.activeAlbumId;
+    if (id == null) return null;
+    for (final album in widget.model.albums) {
+      if (album.id == id) return album;
+    }
+    return null;
   }
 
   Widget _collectionChip(String label, GalleryCollection value) {
@@ -269,7 +544,12 @@ class _PhotosPageState extends State<PhotosPage> {
   }
 
   List<Widget> _timeline(BuildContext context) {
-    final groups = _groupByDay(widget.model.items);
+    final sort = _organizer?.sortField ?? CatalogSortField.takenAt;
+    final groups = sort == CatalogSortField.takenAt
+        ? _groupByDay(widget.model.items)
+        : <DateTime?, List<MediaItem>>{
+            if (widget.model.items.isNotEmpty) null: widget.model.items,
+          };
     if (groups.isEmpty) {
       return [
         SliverFillRemaining(
@@ -299,7 +579,7 @@ class _PhotosPageState extends State<PhotosPage> {
           ),
           sliver: SliverToBoxAdapter(
             child: Text(
-              _dateLabel(group.key),
+              group.key == null ? _sortLabel(sort) : _dateLabel(group.key!),
               style: Theme.of(context).textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.w800),
             ),
@@ -332,6 +612,9 @@ class _PhotosPageState extends State<PhotosPage> {
                     item: item,
                     model: widget.model,
                     onAction: (action) => _handleAction(item, action),
+                    onSelect: _organizer == null ? null : () => _toggle(item),
+                    selectionMode: _selected.isNotEmpty,
+                    selected: _selected.contains(item.id),
                   );
                 },
               );
@@ -398,51 +681,32 @@ class _PhotosPageState extends State<PhotosPage> {
   }
 
   Future<void> _addToAlbum(MediaItem item) async {
-    if (widget.model.albums.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Create an album in Library first.')),
-      );
-      return;
-    }
-    final albumId = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-              child: Text(
-                'Add to album',
-                style: Theme.of(context).textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w800),
-              ),
-            ),
-            for (final album in widget.model.albums)
-              ListTile(
-                leading: const Icon(Icons.photo_album_rounded),
-                title: Text(album.name),
-                subtitle: Text('${album.itemIds.length} items'),
-                onTap: () => Navigator.pop(context, album.id),
-              ),
-          ],
-        ),
-      ),
+    final picked = await pickAlbum(
+      context,
+      widget.model.albums,
+      createAlbum: widget.model.createAlbum,
     );
+    final albumId = resolvePickedAlbum(picked, widget.model.albums);
     if (albumId != null) await widget.model.addToAlbum(item, albumId);
   }
 
-  Future<void> _showViewer(MediaItem item) async {
-    final items = List<MediaItem>.of(widget.model.items);
-    final index = items.indexWhere((candidate) => candidate.id == item.id);
+  Future<void> _showViewer(
+    MediaItem item, {
+    List<MediaItem>? items,
+    bool slideshow = false,
+  }) async {
+    final list = List<MediaItem>.of(items ?? widget.model.items);
+    final index = list.indexWhere((candidate) => candidate.id == item.id);
     if (index < 0) return;
     await showDialog<void>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.88),
-      builder: (_) =>
-          MediaViewer(model: widget.model, items: items, initialIndex: index),
+      builder: (_) => MediaViewer(
+        model: widget.model,
+        items: list,
+        initialIndex: index,
+        startSlideshow: slideshow,
+      ),
     );
   }
 
@@ -552,6 +816,15 @@ Map<DateTime, List<MediaItem>> _groupByDay(List<MediaItem> items) {
   }
   return groups;
 }
+
+String _sortLabel(CatalogSortField field) => switch (field) {
+  CatalogSortField.name => 'Sorted by name',
+  CatalogSortField.size => 'Sorted by size',
+  CatalogSortField.kind => 'Sorted by type',
+  CatalogSortField.modifiedAt => 'Sorted by date modified',
+  CatalogSortField.createdAt => 'Sorted by date added',
+  CatalogSortField.takenAt => 'Sorted by date',
+};
 
 String _dateLabel(DateTime date) {
   final today = DateTime.now();

@@ -1,23 +1,22 @@
-# nexGallery — Complete Product and Build Plan
+# nexGallery ? Complete Product and Build Plan
 
-Status on 2 October 2026: active local-gallery prototype. The responsive Flutter
-app is connected to Android MediaStore/SAF and the Windows selected-folder
-scanner. It includes a persisted JSON catalogue, bounded timeline pages, a
-swipeable preview viewer, metadata, and basic virtual organization. A development
-PC server and transfer protocol also exist. Phase 1 remains in progress; the
-production architecture and security requirements below are still the targets.
+Status on 9 October 2026: the Phase 1 feature implementation is in place. The
+Flutter app uses a versioned SQLite catalogue, Android MediaStore/SAF, Windows
+selected folders/watchers, paged media views, integrated local playback and
+settings. Native validation and production release readiness are separate from
+feature implementation. The full six-phase product scope below remains the target.
 See [implementation status](IMPLEMENTATION_STATUS.md),
 [the current stack](TECH_STACK.md), and
-[verification](verification-2026-10-02.md) for the implemented boundaries.
+[latest verification](verification-2026-10-18.md) for implemented boundaries.
 
-| Area | Implemented now | Planned work |
+| Area | Implemented foundation | Remaining product work |
 | --- | --- | --- |
-| Shared app | Material 3 theme, adaptive navigation, paged timeline, swipe/zoom preview and metadata | Settings, full player, large-library performance, localization and remaining accessibility work |
-| Android | MediaStore/SAF bridge, permission states, platform thumbnails, open/share integration, ARM split builds | Device verification, permission-lifecycle hardening, foreground transfers and signed release |
-| Windows | Selected-folder scanner, persisted roots, unavailable-folder preservation, desktop layout and standalone server executable | SQLite, stable file identity, watcher, background agent, native desktop verification, installer and signing |
-| Organization | Virtual albums, favorites and archive; prototype Trash controls | Verified physical recovery across supported OS versions, editor, memories and vault |
-| Remote access | Opt-in development server, token pairing, path guards, range download and checksum-verified transfers | Production device keys, read-only scopes, encrypted transport setup, QR approval and full transfer UI |
-| Offline intelligence | Product design and explicit unavailable UI | Face embeddings, OCR, labels, places and cleanup |
+| Shared app | Adaptive navigation, settings, paged timeline, swipe/zoom viewer, integrated video and metadata | Large-library queries/performance, complete codecs/EXIF, localization and release accessibility |
+| Android | MediaStore/SAF bridge, partial/denied states, permission-lifecycle guards, thumbnails/open/share | Physical-device matrix, background transfers and signed release |
+| Windows | Selected-folder scanner/picker, watchers/reconciliation, unavailable-folder preservation, SQLite and server core | Stable file identity integration, background agent, native build verification, installer/signing |
+| Organization | Virtual albums/favorites/archive; existing physical Trash code | Verified recovery/crash behavior, full editor/vault/memories flows |
+| Remote access | Development pairing, read-only defaults, TLS plumbing, range downloads and verified transfers | Device keys/scopes, owner approval, encrypted network setup and production agent lifecycle |
+| Offline intelligence | Optional analysis/face-engine code exists | Verified models, People corrections, OCR/places/cleanup integration and quality tests |
 
 ## 1. Product definition
 
@@ -506,9 +505,17 @@ shrinking, Dart obfuscation and tree-shaken icons:
 These are download-file sizes for the foundation UI, not installed sizes and
 not the final functional app. They must not be published because the current
 local/CI fallback uses a development signing key. CI enforces a 30 MiB ceiling
-for each split APK and a 40 MiB ceiling for the Universal fallback as early
+for each split APK and a 45 MiB ceiling for the Universal fallback as early
 regression guards; the targets remain below those ceilings and are reviewed when
 each native dependency or optional model is added.
+
+Review on 18 October 2026 after adding the on-device inference runtime (ONNX
+Runtime, 28.6 MB uncompressed on ARM64): native libraries are now stored
+compressed and release builds drop x86/x86_64 plugin libraries. The splits
+measured 21,841,735 bytes (ARM32, 20.83 MiB) and 23,009,895 bytes (ARM64,
+21.94 MiB); the Universal fallback measured 42,705,719 bytes (40.73 MiB), so its
+ceiling moved from 40 to 45 MiB. Model files themselves remain optional
+downloads.
 
 ### Small core APK
 
