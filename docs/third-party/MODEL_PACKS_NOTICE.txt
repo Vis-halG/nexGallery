@@ -1,0 +1,17 @@
+Optional on-device model packs
+
+These models are downloaded only after the user agrees, verified by SHA-256 and
+run locally. Photos are never uploaded.
+
+Objects and scenes: MobileNetV2 (mobilenetv2-12.onnx) from the ONNX Model Zoo,
+https://github.com/onnx/models, licensed under the Apache License 2.0.
+ImageNet class names (bundled as assets/models/imagenet_labels.txt) come from
+the ONNX Model Zoo synset list, derived from WordNet (Princeton University
+WordNet license).
+
+Text in photos: PaddleOCR PP-OCRv3 English detection and recognition models
+(https://github.com/PaddlePaddle/PaddleOCR), Apache License 2.0, as ONNX files
+published by the RapidOCR project (https://huggingface.co/SWHL/RapidOCR),
+Apache License 2.0.
+
+Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
