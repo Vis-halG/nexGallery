@@ -1271,10 +1271,11 @@ final class NexGalleryRuntime extends ChangeNotifier
     }
     try {
       if (isAndroid && _android.isSupported) {
-        final result = await _android.loadThumbnail(
-          Uri.parse(item.uri),
-          size: size,
-        );
+        // MediaStore thumbnails stop at 1024 px; larger photo requests come
+        // from the viewer and decode the original instead.
+        final result = size > 1024 && item.kind == MediaKind.image
+            ? await _android.loadPreview(Uri.parse(item.uri), size: size)
+            : await _android.loadThumbnail(Uri.parse(item.uri), size: size);
         return canAccessMedia(item) ? result.bytes : null;
       }
       if (isWindows && item.kind == MediaKind.image) {

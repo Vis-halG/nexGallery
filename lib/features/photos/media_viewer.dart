@@ -389,7 +389,10 @@ class _MediaViewerState extends State<MediaViewer> {
                 key: ValueKey(item.id),
                 item: item,
                 model: widget.model,
+                // The open photo sharpens from the quick preview to a decode
+                // of the original; neighbours stay light on memory.
                 size: 1024,
+                sharpenTo: index == _index ? _fullSize(context) : null,
                 fit: BoxFit.contain,
                 showFailureMessage: true,
               ),
@@ -590,6 +593,14 @@ class _MediaViewerState extends State<MediaViewer> {
             ),
     ),
   );
+
+  /// Enough pixels for the screen with room to zoom, bounded so one decoded
+  /// photo stays under about 40 MB.
+  int _fullSize(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final screen = media.size.longestSide * media.devicePixelRatio;
+    return (screen * 1.5).clamp(2048, 3072).round();
+  }
 
   Widget _accessUnavailable(MediaItem item, {bool dark = true}) => Center(
     child: Padding(

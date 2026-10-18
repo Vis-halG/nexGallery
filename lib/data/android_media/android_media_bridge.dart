@@ -569,6 +569,16 @@ class AndroidMediaBridge {
     return AndroidThumbnail.fromMap(value);
   }
 
+  /// Decodes the original photo to at most [size] pixels on its longer side,
+  /// up to 4096, for the full-screen viewer. EXIF orientation is applied.
+  Future<AndroidThumbnail> loadPreview(Uri uri, {int size = 2048}) async {
+    final value = await _invokeMap('loadPreview', <String, Object>{
+      'uri': uri.toString(),
+      'size': size,
+    });
+    return AndroidThumbnail.fromMap(value);
+  }
+
   /// Opens Android's mandatory confirmation UI on scoped-storage versions.
   Future<AndroidMediaOperationResult> deleteMedia(Iterable<Uri> uris) async {
     final value = await _invokeMap('deleteMedia', <String, Object>{

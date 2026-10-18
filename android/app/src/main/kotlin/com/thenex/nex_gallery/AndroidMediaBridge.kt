@@ -11,6 +11,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -86,6 +89,7 @@ class AndroidMediaBridge(
                 "requestPermissions" -> requestPermissions(call, result)
                 "queryMedia" -> runAsync(result) { queryMedia(call) }
                 "loadThumbnail" -> runAsync(result) { loadThumbnail(call) }
+                "loadPreview" -> runAsync(result) { loadPreview(call) }
                 "deleteMedia" -> deleteOrTrash(call, result, trash = false)
                 "trashMedia" -> deleteOrTrash(call, result, trash = true)
                 "openMedia" -> openMedia(call, result)
@@ -478,6 +482,95 @@ class AndroidMediaBridge(
             "height" to height,
             "mimeType" to if (compressFormat == Bitmap.CompressFormat.PNG) "image/png" else "image/jpeg",
         )
+    }
+
+    /// A screen-sized decode of the original photo for the full-screen viewer.
+    /// MediaStore thumbnails stop at 1024 px, which looks soft on modern
+    /// screens and when zoomed. EXIF orientation is applied.
+    private fun loadPreview(call: MethodCall): Map<String, Any> {
+        val uri = validatedUri(call.argument<String>("uri"))
+        val maxSize = (call.argument<Number>("size")?.toInt() ?: 2048).coerceIn(256, MAX_PREVIEW_SIZE)
+        var bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
+                val width = info.size.width
+                val height = info.size.height
+                val longest = max(width, height)
+                if (longest > maxSize) {
+                    val scale = maxSize.toFloat() / longest
+                    decoder.setTargetSize(
+                        max(1, (width * scale).roundToInt()),
+                        max(1, (height * scale).roundToInt()),
+                    )
+                }
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        } else {
+            legacyPreview(uri, maxSize)
+        }
+        if (bitmap.width > maxSize || bitmap.height > maxSize) {
+            val scale = minOf(maxSize.toFloat() / bitmap.width, maxSize.toFloat() / bitmap.height)
+            val scaled = Bitmap.createScaledBitmap(
+                bitmap,
+                max(1, (bitmap.width * scale).roundToInt()),
+                max(1, (bitmap.height * scale).roundToInt()),
+                true,
+            )
+            if (scaled !== bitmap) bitmap.recycle()
+            bitmap = scaled
+        }
+        // Transparent PNG/WebP keeps its alpha; photos stay JPEG.
+        val png = bitmap.hasAlpha()
+        val output = ByteArrayOutputStream()
+        if (!bitmap.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 92, output)) {
+            bitmap.recycle()
+            throw BridgeException("preview_encode_failed", "Could not encode preview")
+        }
+        val width = bitmap.width
+        val height = bitmap.height
+        bitmap.recycle()
+        return mapOf(
+            "bytes" to output.toByteArray(),
+            "width" to width,
+            "height" to height,
+            "mimeType" to if (png) "image/png" else "image/jpeg",
+        )
+    }
+
+    /// Android 7-8: sampled BitmapFactory decode, then the EXIF rotation that
+    /// BitmapFactory ignores.
+    private fun legacyPreview(uri: Uri, maxSize: Int): Bitmap {
+        val decoded = resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFileDescriptor(descriptor.fileDescriptor, null, bounds)
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, maxSize)
+            }
+            BitmapFactory.decodeFileDescriptor(descriptor.fileDescriptor, null, options)
+        } ?: throw BridgeException("preview_decode_failed", "Image could not be decoded")
+        val orientation = try {
+            resolver.openInputStream(uri)?.use {
+                ExifInterface(it).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL,
+                )
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+            else -> return decoded
+        }
+        val rotated = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+        if (rotated !== decoded) decoded.recycle()
+        return rotated
     }
 
     private fun legacyThumbnail(uri: Uri, size: Int): Bitmap {
@@ -1428,6 +1521,7 @@ class AndroidMediaBridge(
         private const val DOCUMENT_PICKER_REQUEST = 7404
         private const val MAX_PAGE_SIZE = 500
         private const val MAX_THUMBNAIL_SIZE = 1024
+        private const val MAX_PREVIEW_SIZE = 4096
         private const val COPY_BUFFER_SIZE = 64 * 1024
         private const val MAX_CACHE_FILE_NAME_CHARS = 128
         private const val MAX_CACHE_NAME_ATTEMPTS = 999
