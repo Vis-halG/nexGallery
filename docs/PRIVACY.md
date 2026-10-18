@@ -21,6 +21,7 @@ analytics or crash-reporting SDK.
 | You tap "Find PCs on Wi-Fi" | A UDP discovery broadcast | Devices on your local network |
 | You use Wake PC | A Wake-on-LAN packet with your PC's network address | Your local network |
 | You download an optional model pack (faces, objects, text) | A normal download request | The model hosts listed below; nothing about your media is sent |
+| The app starts (GitHub release builds, "Check for updates automatically" on) | A request for `update.json`, and the update file when you tap Update | github.com and its download servers, which see your IP address; nothing about your media is sent |
 
 Model packs come from fixed addresses on github.com, media.githubusercontent.com
 (OpenCV Zoo) and huggingface.co, and each file is checked against a built-in
@@ -55,6 +56,7 @@ Originals are never deleted by these actions.
 | Camera (requested only when you scan) | Reading the pairing QR code; frames are not stored |
 | Biometrics | Asking for your fingerprint, face or screen-lock PIN before emptying Trash |
 | Set wallpaper | "Set as wallpaper" |
+| Install apps (GitHub release builds) | Installing a nexGallery update you downloaded, after its SHA-256 matches the release |
 | Wake lock (from the video player) | Keeping playback running while a video plays |
 
 ## Children

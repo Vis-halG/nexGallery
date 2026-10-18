@@ -34,6 +34,15 @@ Security and release documents: [threat model](docs/THREAT_MODEL.md),
 
 No account, cloud media storage, advertising or analytics.
 
+## Install and update
+
+Download the latest build from
+[Releases](https://github.com/Vis-halG/nexGallery/releases/latest):
+`nexGallery-…-arm64-v8a.apk` for most phones (`armeabi-v7a` for older ones)
+and `nexGallery-…-windows-x64-setup.exe` for the PC. Every push to `main`
+publishes a new release; installed apps show an "Update" banner and update
+themselves (see [release](docs/RELEASE.md)).
+
 ## Targets
 
 - Android 7.0+ (`minSdk 24`), ARM32 and ARM64.

@@ -20,6 +20,7 @@ Checked in `build/app/outputs/logs/manifest-merger-*-report.txt`.
 | `INTERNET`, `ACCESS_NETWORK_STATE` | app | no | no |
 | `SET_WALLPAPER` | app | no | no |
 | `USE_BIOMETRIC` | app | no | no |
+| `REQUEST_INSTALL_PACKAGES` | app (GitHub release builds) | settings switch | **Not allowed on Play**: remove it and build without `NEXGALLERY_UPDATES` for a Play release |
 | `WAKE_LOCK` | androidx.media3 exoplayer | no | no |
 
 Not requested: `MANAGE_EXTERNAL_STORAGE`, `ACCESS_MEDIA_LOCATION`, location,

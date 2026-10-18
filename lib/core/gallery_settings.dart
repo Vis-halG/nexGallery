@@ -10,6 +10,7 @@ final class GallerySettings {
     this.transfersOnWifiOnly = true,
     this.cameraBackup = false,
     this.mobileVideoQuality = 720,
+    this.checkForUpdates = true,
   });
 
   final GalleryAppearance appearance;
@@ -29,6 +30,9 @@ final class GallerySettings {
   /// metered network; 0 always streams the original.
   final int mobileVideoQuality;
 
+  /// Release builds ask GitHub for a newer build when the app starts.
+  final bool checkForUpdates;
+
   GallerySettings copyWith({
     GalleryAppearance? appearance,
     bool? autoRefresh,
@@ -37,6 +41,7 @@ final class GallerySettings {
     bool? transfersOnWifiOnly,
     bool? cameraBackup,
     int? mobileVideoQuality,
+    bool? checkForUpdates,
   }) => GallerySettings(
     appearance: appearance ?? this.appearance,
     autoRefresh: autoRefresh ?? this.autoRefresh,
@@ -46,6 +51,7 @@ final class GallerySettings {
     transfersOnWifiOnly: transfersOnWifiOnly ?? this.transfersOnWifiOnly,
     cameraBackup: cameraBackup ?? this.cameraBackup,
     mobileVideoQuality: mobileVideoQuality ?? this.mobileVideoQuality,
+    checkForUpdates: checkForUpdates ?? this.checkForUpdates,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -56,6 +62,7 @@ final class GallerySettings {
     'transfersOnWifiOnly': transfersOnWifiOnly,
     'cameraBackup': cameraBackup,
     'mobileVideoQuality': mobileVideoQuality,
+    'checkForUpdates': checkForUpdates,
   };
 
   factory GallerySettings.fromJson(Map<String, Object?> json) =>
@@ -74,5 +81,6 @@ final class GallerySettings {
           final int value when const [0, 360, 720].contains(value) => value,
           _ => 720,
         },
+        checkForUpdates: json['checkForUpdates'] as bool? ?? true,
       );
 }

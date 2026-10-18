@@ -8,6 +8,7 @@ import '../../services/files/file_tools.dart';
 import '../../src/gallery_model.dart';
 import '../../src/gallery_organizer.dart';
 import '../../src/gallery_tools.dart';
+import '../../services/updates/app_update.dart';
 import '../common/dialogs.dart';
 import '../common/file_exchange.dart';
 
@@ -170,6 +171,9 @@ class SettingsPage extends StatelessWidget {
             _OrganizationBackup(organizer: model as GalleryOrganizer),
           ],
           const SizedBox(height: 24),
+          Text('App updates', style: Theme.of(context).textTheme.titleLarge),
+          _AppUpdates(model: model),
+          const SizedBox(height: 24),
           Text('Privacy', style: Theme.of(context).textTheme.titleLarge),
           const ListTile(
             contentPadding: EdgeInsets.zero,
@@ -296,4 +300,91 @@ class _OrganizationBackupState extends State<_OrganizationBackup> {
       if (_busy) const LinearProgressIndicator(),
     ],
   );
+}
+
+/// The installed build, automatic checks and a manual check.
+class _AppUpdates extends StatelessWidget {
+  const _AppUpdates({required this.model});
+
+  final GalleryModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    final updater = AppUpdater.instance;
+    final version = appBuild == 0
+        ? 'nexGallery $appVersion · development build'
+        : 'nexGallery $appVersion (build $appBuild)';
+    if (updater == null) {
+      return ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.info_outline_rounded),
+        title: Text(version),
+        subtitle: const Text(
+          'Builds published on GitHub update themselves. This build does not check for updates.',
+        ),
+      );
+    }
+    return AnimatedBuilder(
+      animation: updater,
+      builder: (context, _) {
+        final release = updater.release;
+        final status = switch (updater.status) {
+          UpdateStatus.checking => 'Checking GitHub…',
+          UpdateStatus.upToDate => 'You have the latest build.',
+          UpdateStatus.available => '${release!.label} is available.',
+          UpdateStatus.downloading =>
+            'Downloading ${(updater.progress * 100).round()}%',
+          UpdateStatus.ready => '${release!.label} is ready to install.',
+          UpdateStatus.installing => 'Installing…',
+          UpdateStatus.failed => updater.error ?? 'The check failed.',
+          UpdateStatus.idle => 'Not checked yet.',
+        };
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.system_update_rounded),
+              title: Text(version),
+              subtitle: Text(status),
+              trailing: switch (updater.status) {
+                UpdateStatus.available || UpdateStatus.failed
+                    when updater.release != null &&
+                        updater.release!.build > appBuild =>
+                  FilledButton(
+                    onPressed: updater.download,
+                    child: const Text('Download'),
+                  ),
+                UpdateStatus.ready => FilledButton(
+                  onPressed: updater.install,
+                  child: const Text('Install'),
+                ),
+                UpdateStatus.checking ||
+                UpdateStatus.downloading ||
+                UpdateStatus.installing => const SizedBox.square(
+                  dimension: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                _ => OutlinedButton(
+                  onPressed: updater.check,
+                  child: const Text('Check now'),
+                ),
+              },
+            ),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Check for updates automatically'),
+              subtitle: const Text(
+                'When nexGallery starts, it asks GitHub for a newer build. Nothing about your photos is sent.',
+              ),
+              value: model.settings.checkForUpdates,
+              onChanged: (value) => model.updateSettings(
+                model.settings.copyWith(checkForUpdates: value),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

@@ -42,6 +42,37 @@ themselves are in [the product plan, §15](NEXGALLERY_PRODUCT_AND_BUILD_PLAN.md)
 4. Uninstalling removes the sign-in entry and asks before deleting
    `%LOCALAPPDATA%\nexGallery`. Photos and files are never removed.
 
+## In-app updates (GitHub releases)
+
+Every push to `main` runs `.github/workflows/release.yml`. It builds split
+APKs signed with the release key, the Windows installer and `update.json`,
+and publishes them as the GitHub release `build-<run number>`, marked latest.
+
+- Builds from that workflow carry `NEXGALLERY_BUILD`, `NEXGALLERY_VERSION`
+  and `NEXGALLERY_UPDATES=true`. A few seconds after start they read
+  `https://github.com/Vis-halG/nexGallery/releases/latest/download/update.json`
+  (Settings → App updates can turn this off), offer a newer build in a banner,
+  download the file for the phone's ABI or the Windows installer, and check
+  its size and SHA-256 before installing. Only URLs under this repository's
+  `releases/download/` are accepted.
+- Android opens its own installer; the first time it asks to allow
+  nexGallery to install apps. It refuses an APK signed with another key.
+- Windows runs the installer with `/SILENT`; it stops the background agent,
+  upgrades in place and opens nexGallery again.
+- Local builds and Play builds report "development build" and never check.
+
+One-time setup on the PC (creates the key and the GitHub secrets
+`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\setup_release_signing.ps1
+```
+
+Keep the printed password and `Documents\nexGallery-signing\nexgallery-release.jks`
+somewhere safe. Phones that installed a build signed with another key (for
+example a local development build) must uninstall it once before installing a
+release build.
+
 ## Release checklist
 
 - [ ] `dart format --output=none --set-exit-if-changed lib test`,

@@ -137,6 +137,23 @@ class DeviceBridge {
     }
   }
 
+  /// The ABIs this phone runs, preferred first, for example `arm64-v8a`.
+  Future<List<String>> supportedAbis() async {
+    if (!_isAndroid) return const [];
+    final value = await _channel.invokeListMethod<String>('supportedAbis');
+    return value ?? const [];
+  }
+
+  /// Opens Android's installer for a verified update in the app cache.
+  /// Returns false when the user must first allow nexGallery to install
+  /// apps; Android then shows that setting.
+  Future<bool> installApk(String path) async {
+    final value = await _channel.invokeMethod<String>('installApk', {
+      'path': path,
+    });
+    return value == 'started';
+  }
+
   /// Returns false when this device does not allow apps to set wallpaper.
   Future<bool> setAndroidWallpaper(Uri uri, String target) async {
     final value = await _channel.invokeMethod<Map<Object?, Object?>>(

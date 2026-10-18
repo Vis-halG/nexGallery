@@ -18,10 +18,13 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import com.google.zxing.integration.android.IntentIntegrator
+import java.io.File
 import java.io.FileNotFoundException
 import java.util.concurrent.Executors
 
@@ -45,6 +48,8 @@ class DeviceTools(
             "getNetworkState" -> result.success(networkState())
             "scanQrCode" -> scanQrCode(call, result)
             "confirmUser" -> confirmUser(call, result)
+            "supportedAbis" -> result.success(Build.SUPPORTED_ABIS.toList())
+            "installApk" -> installApk(call, result)
             else -> result.notImplemented()
         }
     }
@@ -64,6 +69,39 @@ class DeviceTools(
             .setBeepEnabled(false)
             .setOrientationLocked(false)
             .initiateScan()
+    }
+
+    /// Opens Android's installer for an update the app downloaded and
+    /// verified. Android itself refuses an APK signed with a different key.
+    /// Replies "started", or "needsPermission" after opening the setting that
+    /// lets nexGallery install apps.
+    private fun installApk(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")
+        val updates = File(activity.cacheDir, "updates").canonicalFile
+        val file = path?.let { File(it).canonicalFile }
+        if (file == null || file.parentFile != updates || !file.name.endsWith(".apk") || !file.isFile) {
+            result.error("invalid_update", "Only downloaded updates can be installed", null)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !activity.packageManager.canRequestPackageInstalls()
+        ) {
+            activity.startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${activity.packageName}"),
+                ),
+            )
+            result.success("needsPermission")
+            return
+        }
+        val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+        activity.startActivity(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        result.success("started")
     }
 
     private var authResult: MethodChannel.Result? = null

@@ -57,6 +57,8 @@ Name: desktopicon; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Open {#AppName}"; Flags: nowait postinstall skipifsilent
+; In-app updates run this installer with /SILENT; reopen the app afterwards.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 ; Stop the background server so its files can be removed.

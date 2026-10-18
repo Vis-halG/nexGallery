@@ -1,0 +1,233 @@
+name: Release
+
+# Every push to main publishes a GitHub release that installed apps offer as
+# an update: signed split APKs, the Windows installer and update.json, which
+# the apps read from releases/latest/download/update.json.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  signing:
+    name: Release signing configured
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No release was published: run tool/setup_release_signing.ps1 once on the PC."
+          fi
+
+  android:
+    name: Signed Android APKs
+    needs: signing
+    if: needs.signing.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      # Android only installs an update signed with the same key, so every
+      # release uses the key created by tool/setup_release_signing.ps1.
+      - name: Release signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE" ] || [ -z "$PASSWORD" ] || [ -z "$ALIAS" ]; then
+            echo "::error::Release signing is not set up. Run tool/setup_release_signing.ps1 once on the PC."
+            exit 1
+          fi
+          echo "$KEYSTORE" | base64 -d > android/app/nexgallery-release.jks
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=nexgallery-release.jks\n' \
+            "$PASSWORD" "$PASSWORD" "$ALIAS" > android/key.properties
+
+      - name: Build
+        run: |
+          version=$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' pubspec.yaml)
+          build=${{ github.run_number }}
+          flutter pub get
+          flutter build apk --release \
+            --split-per-abi \
+            --target-platform android-arm,android-arm64 \
+            --obfuscate \
+            --split-debug-info=build/symbols/android \
+            --build-number=$build \
+            --dart-define=NEXGALLERY_BUILD=$build \
+            --dart-define=NEXGALLERY_VERSION=$version \
+            --dart-define=NEXGALLERY_UPDATES=true
+          mkdir -p dist
+          for abi in arm64-v8a armeabi-v7a; do
+            cp build/app/outputs/flutter-apk/app-$abi-release.apk \
+              dist/nexGallery-$version-build$build-$abi.apk
+          done
+
+      - name: Check the release signature
+        run: |
+          build_tools="$(find "$ANDROID_SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          for apk in dist/*.apk; do
+            "$build_tools/zipalign" -c -P 16 4 "$apk"
+            certs="$("$build_tools/apksigner" verify --print-certs "$apk")"
+            if ! grep -q "CN=nexGallery" <<< "$certs"; then
+              echo "::error::$apk is not signed with the nexGallery release key"
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-release
+          if-no-files-found: error
+          path: dist/*.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-symbols
+          if-no-files-found: error
+          path: build/symbols/
+
+  windows:
+    name: Windows installer
+    needs: signing
+    if: needs.signing.outputs.ready == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*([0-9.]+)').Matches[0].Groups[1].Value
+          $build = '${{ github.run_number }}'
+          flutter pub get
+          dart run tool/build_server.dart
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          flutter build windows --release --build-number=$build `
+            "--dart-define=NEXGALLERY_BUILD=$build" `
+            "--dart-define=NEXGALLERY_VERSION=$version" `
+            --dart-define=NEXGALLERY_UPDATES=true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          & $iscc "/DAppVersion=$version.$build" windows\installer\nexgallery.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build\installer\*.exe dist\
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-release
+          if-no-files-found: error
+          path: dist/*.exe
+
+  publish:
+    name: Publish release
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Collect files
+        run: |
+          gh run download "$GITHUB_RUN_ID" --name android-release --dir dist
+          gh run download "$GITHUB_RUN_ID" --name windows-release --dir dist
+          ls -l dist
+
+      - name: Notes and update manifest
+        run: |
+          version=$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' pubspec.yaml)
+          build=${{ github.run_number }}
+          previous=$(git tag --list 'build-*' --sort=-v:refname | head -1)
+          if [ -n "$previous" ]; then
+            git log --no-merges --format='- %s' "$previous..HEAD" | head -30 > notes.md
+          else
+            git log --no-merges -20 --format='- %s' > notes.md
+          fi
+          python3 - "$version" "$build" <<'PY'
+          import datetime, hashlib, json, os, sys
+
+          version, build = sys.argv[1], int(sys.argv[2])
+          base = (f"https://github.com/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/releases/download/build-{build}/")
+
+          def entry(name):
+              path = os.path.join("dist", name)
+              with open(path, "rb") as handle:
+                  digest = hashlib.sha256(handle.read()).hexdigest()
+              return {"url": base + name, "sha256": digest,
+                      "size": os.path.getsize(path)}
+
+          files = sorted(os.listdir("dist"))
+          android = {abi: entry(name) for name in files
+                     for abi in ("arm64-v8a", "armeabi-v7a")
+                     if name.endswith(f"-{abi}.apk")}
+          windows = {"x64": entry(name) for name in files
+                     if name.endswith("-windows-x64-setup.exe")}
+          if len(android) != 2 or len(windows) != 1:
+              sys.exit(f"Unexpected release files: {files}")
+          with open("notes.md") as handle:
+              notes = handle.read().strip()
+          manifest = {
+              "schema": 1,
+              "version": version,
+              "build": build,
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc)
+                  .isoformat(timespec="seconds"),
+              "notes": notes,
+              "android": android,
+              "windows": windows,
+          }
+          with open("dist/update.json", "w") as handle:
+              json.dump(manifest, handle, indent=2)
+          with open("dist/SHA256SUMS.txt", "w") as handle:
+              for name in files:
+                  with open(os.path.join("dist", name), "rb") as file:
+                      handle.write(f"{hashlib.sha256(file.read()).hexdigest()}  {name}\n")
+          PY
+          cat dist/update.json
+
+      - name: Publish
+        run: |
+          version=$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' pubspec.yaml)
+          build=${{ github.run_number }}
+          gh release create "build-$build" dist/* \
+            --title "nexGallery $version (build $build)" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            --latest

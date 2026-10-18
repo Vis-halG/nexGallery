@@ -10,6 +10,9 @@
     <!-- Asks for a fingerprint, face or screen-lock PIN before emptying Trash
          or another action that cannot be undone. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Only for updates downloaded from this app's GitHub releases, after their
+         checksum is verified. Builds for Google Play must not include it. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Android 13+ grants media access per collection. Android 14 can grant
          access to only the photos and videos selected by the user. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
