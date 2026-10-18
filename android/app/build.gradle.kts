@@ -27,6 +27,12 @@ android {
     }
 
     packaging {
+        // Compressed native libraries keep the download small: ONNX Runtime
+        // alone is 28.6 MB uncompressed on ARM64. Android extracts them once
+        // at install time.
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += listOf(
                 "META-INF/DEPENDENCIES*",
@@ -105,6 +111,15 @@ if (!keystorePropertiesFile.exists() && !allowDevelopmentSigning) {
     }
 }
 
+// Release builds target ARM phones only (plan §2). Plugins such as ONNX
+// Runtime still ship x86/x86_64 libraries, 12 MB of dead weight without a
+// matching Flutter engine. Debug builds keep them for the x64 emulator.
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.packaging.jniLibs.excludes.addAll(listOf("lib/x86/**", "lib/x86_64/**"))
+    }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
@@ -113,4 +128,12 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Match the Media3 version used by video_player_android.
+    implementation("androidx.media3:media3-transformer:1.9.2")
+    implementation("androidx.media3:media3-effect:1.9.2")
+    // Camera QR scanning for PC pairing; ZXing only, no Google services.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }

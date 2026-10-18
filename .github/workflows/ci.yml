@@ -34,7 +34,9 @@ jobs:
         run: |
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
-          flutter test
+          flutter test --exclude-tags performance
+          # The 100,000-item budget runs alone so other suites cannot skew it.
+          flutter test --tags performance
 
       - name: Build small ARM APKs
         run: |
@@ -68,7 +70,9 @@ jobs:
       - name: Enforce universal APK size budget
         shell: bash
         run: |
-          limit=$((40 * 1024 * 1024))
+          # Reviewed 18 Oct 2026 for ONNX Runtime (about 20 MB compressed for both
+          # ABIs); the split APKs remain the main download.
+          limit=$((45 * 1024 * 1024))
           apk=build/app/outputs/flutter-apk/nexGallery-universal.apk
           bytes=$(stat -c%s "$apk")
           echo "$(basename "$apk"): $bytes bytes"
@@ -95,7 +99,9 @@ jobs:
 
       - name: Android lint
         working-directory: android
-        run: bash ./gradlew -PallowDevelopmentSigning=true lintRelease
+        # App module only: plugin modules are linted against their own lower
+        # minSdk (flutter_onnxruntime 1.9.0 fails NewApi there at API 21).
+        run: bash ./gradlew -PallowDevelopmentSigning=true :app:lintRelease
 
       - uses: actions/upload-artifact@v7
         with:
@@ -120,13 +126,35 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Dependencies and build
+      - name: Dependencies
+        run: flutter pub get
+
+      - name: PC server tests and executables
         run: |
-          flutter pub get
-          flutter build windows --release
+          dart run windows/server/test/remote_server_smoke_test.dart
+          dart run tool/build_server.dart
+          dart run windows/server/test/compiled_exe_smoke_test.dart
+
+      # The CMake install step copies the background agent next to the app.
+      - name: Build
+        run: flutter build windows --release
+
+      - name: Installer (unsigned development build)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          $version = (Select-String -Path pubspec.yaml -Pattern '^version:\s*([0-9.]+)').Matches[0].Groups[1].Value
+          & $iscc "/DAppVersion=$version" windows\installer\nexgallery.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash build\installer\*.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content build\installer\SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v7
         with:
-          name: nexGallery-windows-foundation
+          name: nexGallery-windows-development
           if-no-files-found: error
-          path: build/windows/x64/runner/Release/
+          path: |
+            build/windows/x64/runner/Release/
+            build/installer/
