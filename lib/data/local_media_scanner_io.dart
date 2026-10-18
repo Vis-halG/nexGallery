@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../core/media_item.dart';
+import 'windows_files/file_identity.dart';
 import 'local_media_scanner_types.dart';
 
 LocalMediaScanner createLocalMediaScanner() => const _IoLocalMediaScanner();
@@ -20,12 +21,20 @@ final class _IoLocalMediaScanner implements LocalMediaScanner {
   }) async {
     final settings = options ?? ScanOptions();
     final cancellation = cancellationToken ?? ScanCancellationToken();
-    final excludedPaths = settings.excludedPaths.map((path) =>
-      _normalizedPath(Directory(path).absolute.path).replaceAll(RegExp(r'/+$'), '')).toList();
+    final excludedPaths = settings.excludedPaths
+        .map(
+          (path) =>
+              _normalizedPath(Directory(path).absolute.path)
+                  .replaceAll(RegExp(r'/+$'), ''),
+        )
+        .toList();
     bool excluded(String path) {
       final normalized = _normalizedPath(File(path).absolute.path);
-      return excludedPaths.any((root) => normalized == root || normalized.startsWith('$root/'));
+      return excludedPaths.any(
+        (root) => normalized == root || normalized.startsWith('$root/'),
+      );
     }
+
     final roots = rootPaths
         .map((path) => path.trim())
         .where((path) => path.isNotEmpty)
@@ -143,6 +152,7 @@ final class _IoLocalMediaScanner implements LocalMediaScanner {
             try {
               final file = File(entity.path);
               final stat = await file.stat();
+              final identity = windowsFileIdentity(file.path);
               items.add(
                 MediaItem(
                   id: _stableId('${settings.source.name}:$normalizedPath'),
@@ -157,7 +167,10 @@ final class _IoLocalMediaScanner implements LocalMediaScanner {
                     createdAt: stat.changed.toUtc(),
                     mimeType: mimeTypeForExtension(extension),
                     extension: extension.isEmpty ? null : extension,
-                    attributes: <String, String>{'rootPath': root.path},
+                    attributes: <String, String>{
+                      'rootPath': root.path,
+                      'fileIdentity': ?identity,
+                    },
                   ),
                   indexedAt: DateTime.now().toUtc(),
                 ),
