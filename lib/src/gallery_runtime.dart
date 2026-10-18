@@ -8,17 +8,28 @@ import '../core/catalog_models.dart';
 import '../core/media_item.dart';
 import '../core/gallery_settings.dart';
 import '../data/android_media/android_media_bridge.dart';
+import '../data/device/device_bridge.dart';
 import '../data/local_media_scanner.dart';
 import '../data/media_catalog_repository.dart';
 import '../data/gallery_preferences_store.dart';
 import '../data/windows_files/windows_folder_watcher.dart';
 import 'gallery_model.dart';
+import 'gallery_organizer.dart';
+import 'gallery_tools.dart';
+import '../services/files/recoverable_trash.dart';
+import '../services/files/file_tools.dart';
+import '../services/organization/memories.dart';
+import '../services/organization/organization_backup.dart';
 
-final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
+import 'package:path/path.dart' as p;
+
+final class NexGalleryRuntime extends ChangeNotifier
+    implements GalleryModel, GalleryTools, GalleryOrganizer {
   NexGalleryRuntime({
     TargetPlatform? platform,
     LocalMediaScanner? scanner,
     AndroidMediaBridge? androidBridge,
+    DeviceBridge? deviceBridge,
     WindowsFolderWatcher? folderWatcher,
     this.dataDirectory,
     int pageSize = 120,
@@ -26,11 +37,13 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
        _platform = platform ?? defaultTargetPlatform,
        _scanner = scanner ?? createLocalMediaScanner(),
        _android = androidBridge ?? AndroidMediaBridge.instance,
+       _device = deviceBridge ?? DeviceBridge.instance,
        _folderWatcher = folderWatcher ?? WindowsFolderWatcher(),
        _pageSize = pageSize;
 
   final TargetPlatform _platform;
   final AndroidMediaBridge _android;
+  final DeviceBridge _device;
   final WindowsFolderWatcher _folderWatcher;
   final LocalMediaScanner _scanner;
   final int _pageSize;
@@ -55,6 +68,8 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
   Set<MediaKind> _kinds = <MediaKind>{};
   String? _dataDirectory;
   String? _albumId;
+  CatalogSortField _sortField = CatalogSortField.takenAt;
+  CatalogSortDirection _sortDirection = CatalogSortDirection.descending;
   bool _disposed = false;
   bool _initialized = false;
 
@@ -109,21 +124,152 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
   bool get isAndroid => _platform == TargetPlatform.android;
 
   @override
+  List<MediaItem> get localItems => List.unmodifiable(
+    _repository?.snapshot.items.where((item) => canAccessMedia(item)) ??
+        const <MediaItem>[],
+  );
+
+  @override
+  Future<Directory> toolsDirectory() async {
+    if (_dataDirectory == null) {
+      throw StateError('The library is still opening.');
+    }
+    final directory = Directory(p.join(_dataDirectory!, 'tools'));
+    await directory.create(recursive: true);
+    return directory;
+  }
+
+  @override
+  Future<File> materialize(MediaItem item) async {
+    if (!canAccessMedia(item) || item.section == MediaSection.trash) {
+      throw StateError('This original is unavailable.');
+    }
+    if (isAndroid) {
+      final cached = await _android.copyDocumentToAppCache(Uri.parse(item.uri));
+      if (!canAccessMedia(item)) {
+        final file = File(cached.path);
+        if (await file.exists()) await file.delete();
+        throw StateError('Access to the original has changed.');
+      }
+      return File(cached.path);
+    }
+    return _fileForItem(item);
+  }
+
+  @override
+  Future<String> saveEditedCopy(MediaItem original, Uint8List bytes) async {
+    if (!canAccessMedia(original)) {
+      throw StateError('Access to the original has changed.');
+    }
+    final name =
+        '${p.basenameWithoutExtension(original.name)}-edited-${uniqueId().substring(0, 8)}.png';
+    if (isAndroid) {
+      final staged = File(p.join((await toolsDirectory()).path, name));
+      try {
+        await staged.writeAsBytes(bytes, flush: true);
+        final result = await _android.exportAppMedia(
+          staged.path,
+          name: name,
+          mimeType: 'image/png',
+        );
+        await refresh();
+        return result;
+      } finally {
+        if (await staged.exists()) await staged.delete();
+      }
+    }
+    final target = File(
+      p.join(_fileForItem(original).parent.path, safeName(name)),
+    );
+    if (await target.exists()) {
+      throw const FileSystemException('Edited destination exists.');
+    }
+    await target.writeAsBytes(bytes, flush: true);
+    await refresh();
+    return target.path;
+  }
+
+  @override
+  Future<String> saveVideoCopy(MediaItem original, File edited) async {
+    if (!canAccessMedia(original)) {
+      throw StateError('Access to the original has changed.');
+    }
+    final name =
+        '${p.basenameWithoutExtension(original.name)}-edited-${uniqueId().substring(0, 8)}.mp4';
+    if (isAndroid) {
+      final uri = await _android.exportAppMedia(
+        edited.path,
+        name: name,
+        mimeType: 'video/mp4',
+      );
+      await refresh();
+      return uri;
+    }
+    final target = p.join(_fileForItem(original).parent.path, safeName(name));
+    await FileTools().copy(edited.path, target);
+    await refresh();
+    return target;
+  }
+
+  @override
+  Future<void> annotate(MediaItem item, MediaMetadata metadata) async {
+    final current = _repository?.itemById(item.id);
+    if (current != null && canAccessMedia(current)) {
+      await _repository!.upsert(
+        current.copyWith(metadata: withUserOverrides(metadata)),
+        preserveUserState: false,
+      );
+    }
+  }
+
+  @override
+  Future<void> annotateAll(
+    Map<String, MediaMetadata Function(MediaMetadata)> updates,
+  ) async {
+    final repository = _repository;
+    if (repository == null || updates.isEmpty) return;
+    await repository.updateItems(
+      updates.keys.where((id) {
+        final item = repository.itemById(id);
+        return item != null && canAccessMedia(item);
+      }).toList(),
+      (item) => item.copyWith(
+        metadata: withUserOverrides(updates[item.id]!(item.metadata)),
+      ),
+    );
+  }
+
+  @override
   Future<void> initialize() async {
     if (_initialized || _disposed) return;
     _initialized = true;
     try {
       _dataDirectory ??= dataDirectory ?? await _resolveDataDirectory();
-      _repository = await MediaCatalogRepository.open(
+      if (_disposed) return;
+      final opened = await MediaCatalogRepository.open(
         databaseFilePath: _join(_dataDirectory!, 'catalog.sqlite'),
         legacyJsonFilePath: _join(_dataDirectory!, 'catalog.json'),
       );
-      if (_disposed) { await _repository!.dispose(); _repository = null; return; }
+      if (_disposed) {
+        await opened.dispose();
+        return;
+      }
+      _repository = opened;
       _repositorySubscription = _repository!.changes.listen((_) {
         _refreshView();
       });
       await _readSettings();
-      if (_disposed) { await _preferencesStore?.close(); return; }
+      if (_disposed) {
+        await _preferencesStore?.close();
+        return;
+      }
+      if (isWindows) {
+        for (final root in _windowsRoots) {
+          await for (final item in RecoverableTrash().recover(root)) {
+            await _repository!.upsert(item, preserveUserState: false);
+          }
+        }
+      }
       if (!isAndroid) _refreshView();
 
       if (isAndroid) {
@@ -131,7 +277,11 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
       } else if (isWindows) {
         _folderSubscription = _folderWatcher.changes.listen((_) {
           if (!_settings.autoRefresh || _disposed) return;
-          if (_isIndexing) { _refreshQueued = true; } else { unawaited(refresh()); }
+          if (_isIndexing) {
+            _refreshQueued = true;
+          } else {
+            unawaited(refresh());
+          }
         });
         await _configureWatching();
         if (_windowsRoots.isEmpty) {
@@ -150,12 +300,18 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
       }
     } catch (error) {
       _initialized = false;
+      await _folderSubscription?.cancel();
+      _folderSubscription = null;
+      await _folderWatcher.watchSelectedRoots(const <String>[]);
       await _repositorySubscription?.cancel();
       _repositorySubscription = null;
       await _repository?.dispose();
       _repository = null;
       await _preferencesStore?.close();
       _preferencesStore = null;
+      _visiblePhoneIds = <String>{};
+      _visiblePcIds = <String>{};
+      _clearVisibleCatalogue();
       _fail('Could not start the local catalogue.', error);
     }
   }
@@ -195,7 +351,7 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
       _safeNotify();
       return;
     }
-    _permissionGeneration++;
+    final requestGeneration = ++_permissionGeneration;
     _visiblePhoneIds = <String>{};
     _clearVisibleCatalogue();
     _safeNotify();
@@ -206,6 +362,7 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
           AndroidMediaType.video,
         },
       );
+      if (_disposed || requestGeneration != _permissionGeneration) return;
       _hasLimitedAccess = permission.visualAccess == 'partial';
       final hasVisual =
           permission.isGranted(AndroidMediaType.image) ||
@@ -230,7 +387,10 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
   Future<void> refresh() async {
     final repository = _repository;
     if (_disposed) return;
-    if (repository == null) { await initialize(); return; }
+    if (repository == null) {
+      await initialize();
+      return;
+    }
     if (_isIndexing) {
       _refreshQueued = true;
       if (isAndroid) {
@@ -290,15 +450,20 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     _visiblePhoneIds = <String>{};
     _clearVisibleCatalogue();
     try {
-      final permission = await _android.getPermissionStatus(mediaTypes:
-        const <AndroidMediaType>{AndroidMediaType.image, AndroidMediaType.video});
+      final permission = await _android.getPermissionStatus(
+        mediaTypes: const <AndroidMediaType>{
+          AndroidMediaType.image,
+          AndroidMediaType.video,
+        },
+      );
       if (_disposed) return true;
       _hasLimitedAccess = permission.visualAccess == 'partial';
       if (!permission.isGranted(AndroidMediaType.image) &&
           !permission.isGranted(AndroidMediaType.video)) {
         _loadState = GalleryLoadState.permissionRequired;
         _errorMessage = null;
-        _statusMessage = 'Photo and video access is required to scan this phone.';
+        _statusMessage =
+            'Photo and video access is required to scan this phone.';
         return true;
       }
       if (_refreshQueued) return true;
@@ -319,6 +484,7 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
         AndroidMediaType.video,
       },
     );
+    if (_disposed || generation != _permissionGeneration) return false;
     _hasLimitedAccess = permission.visualAccess == 'partial';
     final hasVisual =
         permission.isGranted(AndroidMediaType.image) ||
@@ -352,29 +518,49 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     }
     _discoveredCount = result.length;
     if (_disposed || generation != _permissionGeneration) return false;
-    final latestPermission = await _android.getPermissionStatus(mediaTypes:
-      const <AndroidMediaType>{AndroidMediaType.image, AndroidMediaType.video});
+    final latestPermission = await _android.getPermissionStatus(
+      mediaTypes: const <AndroidMediaType>{
+        AndroidMediaType.image,
+        AndroidMediaType.video,
+      },
+    );
     if (generation != _permissionGeneration ||
         latestPermission.visualAccess != permission.visualAccess ||
-        AndroidMediaType.values.any((type) => latestPermission.statuses[type] != permission.statuses[type])) {
+        AndroidMediaType.values.any(
+          (type) =>
+              latestPermission.statuses[type] != permission.statuses[type],
+        )) {
       _refreshQueued = true;
       return false;
     }
-    await repository.synchronizeSource(MediaSource.phone, result,
+    await repository.synchronizeSource(
+      MediaSource.phone,
+      result,
       removeMissing: !_hasLimitedAccess,
       scannedKinds: <MediaKind>{
         if (permission.isGranted(AndroidMediaType.image)) MediaKind.image,
         if (permission.isGranted(AndroidMediaType.video)) MediaKind.video,
         if (permission.isGranted(AndroidMediaType.audio)) MediaKind.audio,
-      });
+      },
+    );
     if (_disposed || generation != _permissionGeneration) return false;
+    _indexedCount = result.length;
+    _discoveredCount = result.length;
     _visiblePhoneIds = result.map((item) => item.id).toSet();
     if (!_hasLimitedAccess) {
-      _visiblePhoneIds.addAll(repository.snapshot.items.where((item) =>
-        item.source == MediaSource.phone && item.section == MediaSection.trash &&
-        ((item.kind == MediaKind.image && permission.isGranted(AndroidMediaType.image)) ||
-         (item.kind == MediaKind.video && permission.isGranted(AndroidMediaType.video))))
-        .map((item) => item.id));
+      _visiblePhoneIds.addAll(
+        repository.snapshot.items
+            .where(
+              (item) =>
+                  item.source == MediaSource.phone &&
+                  item.section == MediaSection.trash &&
+                  ((item.kind == MediaKind.image &&
+                          permission.isGranted(AndroidMediaType.image)) ||
+                      (item.kind == MediaKind.video &&
+                          permission.isGranted(AndroidMediaType.video))),
+            )
+            .map((item) => item.id),
+      );
     }
     return true;
   }
@@ -392,8 +578,11 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     final result = await _scanner.scan(
       List<String>.of(_windowsRoots),
       cancellationToken: cancellation,
-      options: ScanOptions(source: MediaSource.pc, includeHidden: _settings.includeHiddenFiles,
-        excludedPaths: <String>[_dataDirectory!]),
+      options: ScanOptions(
+        source: MediaSource.pc,
+        includeHidden: _settings.includeHiddenFiles,
+        excludedPaths: <String>[_dataDirectory!],
+      ),
       onProgress: (progress) {
         if (_disposed || generation != _scanGeneration) return;
         _indexedCount = progress.itemsFound;
@@ -418,9 +607,15 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
       ...result.items,
       ...unavailable,
       if (!_settings.includeHiddenFiles)
-        ...repository.snapshot.items.where((item) => item.source == MediaSource.pc &&
-          _windowsRoots.any((root) => _pathIsWithin(_fileForItem(item).path, root)) &&
-          _isHiddenItem(item) && !scannedIds.contains(item.id)),
+        ...repository.snapshot.items.where(
+          (item) =>
+              item.source == MediaSource.pc &&
+              _windowsRoots.any(
+                (root) => _pathIsWithin(_fileForItem(item).path, root),
+              ) &&
+              _isHiddenItem(item) &&
+              !scannedIds.contains(item.id),
+        ),
     ], removeMissing: complete);
     if (!complete) {
       final reason = result.wasCancelled
@@ -457,16 +652,24 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     if (!isWindows || _disposed) return;
     final saved = await _changeConfiguration(() async {
       if (!_windowsRoots.any((root) => _samePath(root, path))) return;
-      final roots = _windowsRoots.where((root) => !_samePath(root, path)).toList();
+      final roots = _windowsRoots
+          .where((root) => !_samePath(root, path))
+          .toList();
       await _persistConfiguration(roots: roots);
       _invalidateWindowsScan();
       await _configureWatching();
       final repository = _repository;
       if (repository != null && !_disposed) {
-        final retained = repository.snapshot.items.where((item) =>
-          item.source == MediaSource.pc && roots.any((root) =>
-            _pathIsWithin(_fileForItem(item).path, root)));
-        await repository.synchronizeSource(MediaSource.pc, retained, preserveTrash: false);
+        final retained = repository.snapshot.items.where(
+          (item) =>
+              item.source == MediaSource.pc &&
+              roots.any((root) => _pathIsWithin(_fileForItem(item).path, root)),
+        );
+        await repository.synchronizeSource(
+          MediaSource.pc,
+          retained,
+          preserveTrash: false,
+        );
       }
       _refreshView(resetPaging: true);
     }, 'The folder selection could not be saved.');
@@ -488,12 +691,19 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
 
   Future<void> _configureWatching() => _folderWatcher.watchSelectedRoots(
     isWindows && _settings.autoRefresh ? _windowsRoots : const <String>[],
-    ignoredPaths: <String>[if (_dataDirectory != null) _dataDirectory!]);
+    ignoredPaths: <String>[?_dataDirectory],
+  );
 
-  Future<bool> _changeConfiguration(Future<void> Function() operation, String message) {
+  Future<bool> _changeConfiguration(
+    Future<void> Function() operation,
+    String message,
+  ) {
     final completion = Completer<bool>();
     _configurationQueue = _configurationQueue.then((_) async {
-      if (_disposed) { completion.complete(false); return; }
+      if (_disposed) {
+        completion.complete(false);
+        return;
+      }
       try {
         await operation();
         _errorMessage = null;
@@ -507,17 +717,29 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     return completion.future;
   }
 
-  Future<void> _persistConfiguration({GallerySettings? settings,
-      List<String>? roots, Map<String, int>? videoPositions}) async {
+  Future<void> _persistConfiguration({
+    GallerySettings? settings,
+    List<String>? roots,
+    Map<String, int>? videoPositions,
+  }) async {
     final store = _preferencesStore;
-    if (store == null) throw StateError('Initialize the gallery before changing settings.');
-    final candidate = GalleryPreferences(settings: settings ?? _settings,
-      roots: roots ?? _windowsRoots, videoPositions: videoPositions ?? _videoPositions);
+    if (store == null) {
+      throw StateError('Initialize the gallery before changing settings.');
+    }
+    final candidate = GalleryPreferences(
+      settings: settings ?? _settings,
+      roots: roots ?? _windowsRoots,
+      videoPositions: videoPositions ?? _videoPositions,
+    );
     await store.save(candidate);
     if (_disposed) return;
     _settings = candidate.settings;
-    _windowsRoots..clear()..addAll(candidate.roots);
-    _videoPositions..clear()..addAll(candidate.videoPositions);
+    _windowsRoots
+      ..clear()
+      ..addAll(candidate.roots);
+    _videoPositions
+      ..clear()
+      ..addAll(candidate.videoPositions);
   }
 
   @override
@@ -526,7 +748,8 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     final saved = await _changeConfiguration(() async {
       final previous = _settings;
       await _persistConfiguration(settings: value);
-      rescan = isWindows && previous.includeHiddenFiles != value.includeHiddenFiles;
+      rescan =
+          isWindows && previous.includeHiddenFiles != value.includeHiddenFiles;
       if (rescan) _invalidateWindowsScan();
       await _configureWatching();
       _refreshView(resetPaging: rescan);
@@ -539,10 +762,11 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     if (isAndroid && _android.isSupported) await _android.openAppSettings();
   }
 
-  String _positionKey(MediaItem item) => '${item.id}:${item.metadata.modifiedAt.microsecondsSinceEpoch}';
+  String _positionKey(MediaItem item) =>
+      '${item.id}:${item.metadata.modifiedAt.microsecondsSinceEpoch}';
   @override
-  Future<Duration> readVideoPosition(MediaItem item) async => Duration(
-    milliseconds: _videoPositions[_positionKey(item)] ?? 0);
+  Future<Duration> readVideoPosition(MediaItem item) async =>
+      Duration(milliseconds: _videoPositions[_positionKey(item)] ?? 0);
   @override
   Future<void> saveVideoPosition(MediaItem item, Duration position) async {
     if (_disposed || _preferencesStore == null || !canAccessMedia(item)) return;
@@ -551,31 +775,58 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
       final key = _positionKey(item);
       positions.remove(key);
       positions[key] = position.inMilliseconds.clamp(0, 1 << 53);
-      while (positions.length > 2000) { positions.remove(positions.keys.first); }
+      while (positions.length > 2000) {
+        positions.remove(positions.keys.first);
+      }
       await _persistConfiguration(videoPositions: positions);
     }, 'Playback position could not be saved.');
   }
 
   @override
-  bool canAccessMedia(MediaItem item) => item.isAvailable &&
-      (isAndroid ? _visiblePhoneIds.contains(item.id) :
-       isWindows && _initialized ? _visiblePcIds.contains(item.id) : true);
+  bool canAccessMedia(MediaItem item) {
+    if (_disposed || !item.isAvailable) return false;
+    final current = _repository?.itemById(item.id);
+    if (_initialized &&
+        (current == null ||
+            !current.isAvailable ||
+            current.uri != item.uri ||
+            current.metadata.modifiedAt != item.metadata.modifiedAt)) {
+      return false;
+    }
+    return isAndroid
+        ? _visiblePhoneIds.contains(item.id)
+        : isWindows && _initialized
+        ? _visiblePcIds.contains(item.id)
+        : true;
+  }
 
   bool _isHiddenItem(MediaItem item) {
     final path = item.relativePath.replaceAll('\\', '/');
-    return path.split('/').any((name) => name.startsWith('.') ||
-      name.toLowerCase() == r'$recycle.bin' ||
-      name.toLowerCase() == 'system volume information');
+    return path
+        .split('/')
+        .any(
+          (name) =>
+              name.startsWith('.') ||
+              name.toLowerCase() == r'$recycle.bin' ||
+              name.toLowerCase() == 'system volume information',
+        );
   }
 
   Set<String> _visibleIds(MediaCatalogRepository repository) {
     if (isAndroid) return _visiblePhoneIds;
-    _visiblePcIds = repository.snapshot.items.where((item) =>
-      item.source == MediaSource.pc &&
-      _windowsRoots.any((root) => _pathIsWithin(_fileForItem(item).path, root)) &&
-      (_dataDirectory == null || !_pathIsWithin(_fileForItem(item).path, _dataDirectory!)) &&
-      (_settings.includeHiddenFiles || !_isHiddenItem(item)))
-      .map((item) => item.id).toSet();
+    _visiblePcIds = repository.snapshot.items
+        .where(
+          (item) =>
+              item.source == MediaSource.pc &&
+              _windowsRoots.any(
+                (root) => _pathIsWithin(_fileForItem(item).path, root),
+              ) &&
+              (_dataDirectory == null ||
+                  !_pathIsWithin(_fileForItem(item).path, _dataDirectory!)) &&
+              (_settings.includeHiddenFiles || !_isHiddenItem(item)),
+        )
+        .map((item) => item.id)
+        .toSet();
     return _visiblePcIds;
   }
 
@@ -612,17 +863,34 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
 
   @override
   Future<void> toggleFavorite(MediaItem item) async {
+    if (_disposed || (isAndroid && !canAccessMedia(item))) return;
     await _repository?.setFavorite(item.id, !item.isFavorite);
   }
 
   @override
   Future<void> archive(MediaItem item) async {
+    if (_disposed || (isAndroid && !canAccessMedia(item))) return;
     await _repository?.moveToArchive(item.id);
   }
 
   @override
   Future<bool> moveToTrash(MediaItem item) async {
-    if (!item.isAvailable) return false;
+    if (!canAccessMedia(item)) return false;
+    if (isWindows) {
+      MediaItem? moved;
+      try {
+        moved = await RecoverableTrash().put(item);
+        await _repository!.upsert(moved, preserveUserState: false);
+        return true;
+      } catch (error) {
+        if (moved != null) {
+          await RecoverableTrash().restore(moved);
+          await RecoverableTrash().finish(moved);
+        }
+        _fail('The item could not be moved to Trash.', error);
+        return false;
+      }
+    }
     if (isAndroid && _android.isSupported) {
       try {
         final result = await _android.setTrashed(<Uri>[Uri.parse(item.uri)]);
@@ -633,13 +901,31 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
         return false;
       }
     }
+    if (!canAccessMedia(item)) return false;
     await _repository?.moveToTrash(item.id);
     return true;
   }
 
   @override
   Future<bool> restore(MediaItem item) async {
-    if (!item.isAvailable) return false;
+    if (!canAccessMedia(item)) return false;
+    if (isWindows &&
+        item.metadata.attributes.containsKey('trash.originalUri')) {
+      try {
+        final restored = await RecoverableTrash().restore(item);
+        try {
+          await _repository!.upsert(restored, preserveUserState: false);
+        } catch (_) {
+          await _fileForItem(restored).rename(_fileForItem(item).path);
+          rethrow;
+        }
+        await RecoverableTrash().finish(item);
+        return true;
+      } catch (error) {
+        _fail('The item could not be restored.', error);
+        return false;
+      }
+    }
     if (isAndroid && _android.isSupported) {
       try {
         final result = await _android.setTrashed(<Uri>[
@@ -652,13 +938,14 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
         return false;
       }
     }
+    if (!canAccessMedia(item)) return false;
     await _repository?.restore(item.id);
     return true;
   }
 
   @override
   Future<bool> deletePermanently(MediaItem item) async {
-    if (!item.isAvailable) return false;
+    if (!canAccessMedia(item)) return false;
     try {
       if (isAndroid && _android.isSupported) {
         var result = await _android.deleteMedia(<Uri>[Uri.parse(item.uri)]);
@@ -671,7 +958,9 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
         final file = _fileForItem(item);
         if (await file.exists()) await file.delete();
       }
+      if (!canAccessMedia(item)) return false;
       await _repository?.deletePermanently(item.id);
+      if (isWindows) await RecoverableTrash().finish(item);
       return true;
     } catch (error) {
       _fail('The file could not be deleted.', error);
@@ -686,12 +975,13 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
 
   @override
   Future<void> addToAlbum(MediaItem item, String albumId) async {
+    if (_disposed || (isAndroid && !canAccessMedia(item))) return;
     await _repository?.addToAlbum(albumId, <String>[item.id]);
   }
 
   @override
   Future<void> open(MediaItem item) async {
-    if (!item.isAvailable) return;
+    if (!canAccessMedia(item)) return;
     try {
       if (isAndroid && _android.isSupported) {
         await _android.openMedia(
@@ -708,7 +998,7 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
 
   @override
   Future<void> share(MediaItem item) async {
-    if (!item.isAvailable) return;
+    if (!canAccessMedia(item)) return;
     try {
       if (isAndroid && _android.isSupported) {
         await _android.shareMedia(
@@ -727,17 +1017,265 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
   }
 
   @override
+  String? get activeAlbumId => _albumId;
+  List<Memory>? _memories;
+  @override
+  List<Memory> get memories =>
+      _memories ??= buildMemories(localItems, now: DateTime.now());
+  @override
+  CatalogSortField get sortField => _sortField;
+  @override
+  CatalogSortDirection get sortDirection => _sortDirection;
+
+  @override
+  void setSort(CatalogSortField field, CatalogSortDirection direction) {
+    if (field == _sortField && direction == _sortDirection) return;
+    _sortField = field;
+    _sortDirection = direction;
+    _refreshView(resetPaging: true);
+  }
+
+  @override
+  Future<void> renameAlbum(String albumId, String name) async {
+    await _repository?.renameAlbum(albumId, name);
+  }
+
+  @override
+  Future<void> deleteAlbum(String albumId) async {
+    if (_albumId == albumId) _albumId = null;
+    await _repository?.deleteAlbum(albumId);
+  }
+
+  @override
+  Future<void> setAlbumCover(String albumId, MediaItem? item) async {
+    if (item != null && !canAccessMedia(item)) return;
+    await _repository?.setAlbumCover(albumId, item?.id);
+  }
+
+  Iterable<String> _accessibleIds(Iterable<MediaItem> items) =>
+      items.where(canAccessMedia).map((item) => item.id);
+
+  @override
+  Future<void> addAllToAlbum(Iterable<MediaItem> items, String albumId) async {
+    await _repository?.addToAlbum(albumId, _accessibleIds(items).toList());
+  }
+
+  @override
+  Future<void> removeFromAlbum(
+    String albumId,
+    Iterable<MediaItem> items,
+  ) async {
+    await _repository?.removeFromAlbum(
+      albumId,
+      items.map((item) => item.id).toList(),
+    );
+  }
+
+  @override
+  Future<void> setFavorites(Iterable<MediaItem> items, bool favorite) async {
+    await _repository?.updateItems(
+      _accessibleIds(items).toList(),
+      (item) => item.copyWith(isFavorite: favorite),
+    );
+  }
+
+  @override
+  Future<void> archiveAll(Iterable<MediaItem> items) async {
+    await _repository?.updateItems(
+      _accessibleIds(items).toList(),
+      (item) => item.section == MediaSection.trash
+          ? item
+          : item.copyWith(section: MediaSection.archive, deletedAt: null),
+    );
+  }
+
+  @override
+  Future<int> moveAllToTrash(Iterable<MediaItem> items) async {
+    final selected = items
+        .where(
+          (item) => canAccessMedia(item) && item.section != MediaSection.trash,
+        )
+        .toList();
+    if (selected.isEmpty) return 0;
+    if (isWindows) {
+      var moved = 0;
+      for (final item in selected) {
+        if (await moveToTrash(item)) moved++;
+      }
+      return moved;
+    }
+    if (isAndroid && _android.isSupported) {
+      try {
+        // One system consent covers the whole selection.
+        final result = await _android.setTrashed(
+          selected.map((item) => Uri.parse(item.uri)).toList(),
+        );
+        if (result.status == 'cancelled') return 0;
+        if (!result.completed && result.status != 'unsupported') return 0;
+      } catch (error) {
+        _fail('The items could not be moved to Trash.', error);
+        return 0;
+      }
+    }
+    final now = DateTime.now().toUtc();
+    return await _repository?.updateItems(
+          _accessibleIds(selected).toList(),
+          (item) => item.copyWith(section: MediaSection.trash, deletedAt: now),
+        ) ??
+        0;
+  }
+
+  @override
+  Future<int> emptyTrash() async {
+    final repository = _repository;
+    if (repository == null) return 0;
+    final trashed = repository.snapshot.items
+        .where(
+          (item) => item.section == MediaSection.trash && canAccessMedia(item),
+        )
+        .toList();
+    if (trashed.isEmpty) return 0;
+    if (isWindows) {
+      var deleted = 0;
+      for (final item in trashed) {
+        if (await deletePermanently(item)) deleted++;
+      }
+      return deleted;
+    }
+    if (isAndroid && _android.isSupported) {
+      try {
+        final uris = trashed.map((item) => Uri.parse(item.uri)).toList();
+        var result = await _android.deleteMedia(uris);
+        if (result.status == 'cancelled') return 0;
+        if (result.requiresRetry) result = await _android.deleteMedia(uris);
+        if (!result.completed) return 0;
+      } catch (error) {
+        _fail('Trash could not be emptied.', error);
+        return 0;
+      }
+    }
+    return repository.removeItems(trashed.map((item) => item.id).toList());
+  }
+
+  @override
+  Future<void> shareAll(Iterable<MediaItem> items) async {
+    final selected = items.where(canAccessMedia).toList();
+    if (selected.isEmpty) return;
+    if (selected.length == 1 || !isAndroid) return share(selected.first);
+    try {
+      final types = selected.map((item) => item.metadata.mimeType).toSet();
+      await _android.shareMedia(
+        selected.map((item) => Uri.parse(item.uri)).toList(),
+        mimeType: types.length == 1 && types.first != null
+            ? types.first
+            : selected.every((item) => item.kind == MediaKind.image)
+            ? 'image/*'
+            : '*/*',
+        chooserTitle: 'Share from nexGallery',
+      );
+    } catch (error) {
+      _fail('These items could not be shared.', error);
+    }
+  }
+
+  @override
+  Future<void> correctMetadata(
+    MediaItem item, {
+    DateTime? takenAt,
+    (double, double)? location,
+    bool clearLocation = false,
+  }) async {
+    if (!canAccessMedia(item)) {
+      throw StateError('Access to the original has changed.');
+    }
+    if (location != null &&
+        (location.$1.abs() > 90 ||
+            location.$2.abs() > 180 ||
+            !location.$1.isFinite ||
+            !location.$2.isFinite)) {
+      throw const FormatException('Enter a valid latitude and longitude.');
+    }
+    await _repository?.updateItems([item.id], (current) {
+      final attributes = {...current.metadata.attributes};
+      if (takenAt != null) {
+        attributes[userTakenAtKey] = takenAt.toUtc().toIso8601String();
+      }
+      if (clearLocation) {
+        attributes
+          ..remove(userLatitudeKey)
+          ..remove(userLongitudeKey)
+          ..[userNoLocationKey] = 'true';
+      } else if (location != null) {
+        attributes
+          ..remove(userNoLocationKey)
+          ..[userLatitudeKey] = '${location.$1}'
+          ..[userLongitudeKey] = '${location.$2}';
+      }
+      return current.copyWith(
+        metadata: withUserOverrides(
+          current.metadata.copyWith(attributes: attributes),
+        ),
+      );
+    });
+  }
+
+  @override
+  Future<void> setWallpaper(MediaItem item, WallpaperTarget target) async {
+    if (!canAccessMedia(item) || item.kind != MediaKind.image) {
+      throw StateError('Choose an available photo.');
+    }
+    if (isAndroid && _android.isSupported) {
+      if (!await _device.setAndroidWallpaper(
+        Uri.parse(item.uri),
+        target.name,
+      )) {
+        throw UnsupportedError(
+          'This phone does not allow apps to set wallpaper.',
+        );
+      }
+    } else if (isWindows) {
+      if (target == WallpaperTarget.lock) {
+        throw UnsupportedError(
+          'Windows lets apps change only the desktop background.',
+        );
+      }
+      await setWindowsWallpaper(_fileForItem(item).path);
+    } else {
+      throw UnsupportedError('Wallpaper is available on Android and Windows.');
+    }
+  }
+
+  @override
+  Future<Uint8List> exportOrganization(String password) async {
+    final repository = _repository;
+    if (repository == null) throw StateError('The library is still opening.');
+    return OrganizationBackup.encrypt(repository.snapshot, password);
+  }
+
+  @override
+  Future<int> importOrganization(Uint8List backup, String password) async {
+    final repository = _repository;
+    if (repository == null) throw StateError('The library is still opening.');
+    final decoded = await OrganizationBackup.decrypt(backup, password);
+    return repository.restoreOrganization(
+      albums: decoded.albums,
+      items: decoded.items,
+    );
+  }
+
+  @override
   Future<Uint8List?> loadThumbnail(MediaItem item, {int size = 384}) async {
-    if (!item.isAvailable) return null;
+    if (!canAccessMedia(item)) return null;
     if (item.kind != MediaKind.image && item.kind != MediaKind.video) {
       return null;
     }
     try {
       if (isAndroid && _android.isSupported) {
-        return (await _android.loadThumbnail(
+        final result = await _android.loadThumbnail(
           Uri.parse(item.uri),
           size: size,
-        )).bytes;
+        );
+        return canAccessMedia(item) ? result.bytes : null;
       }
       if (isWindows && item.kind == MediaKind.image) {
         return await _decodeLocalThumbnail(_fileForItem(item).path, size);
@@ -844,10 +1382,15 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
       favoritesOnly: _collection == GalleryCollection.favorites,
       albumId: _albumId,
       kinds: _kinds,
-      sortField: CatalogSortField.takenAt,
+      sortField: _sortField,
+      sortDirection: _sortDirection,
       limit: _pageSize,
       offset: offset,
-      itemIds: isAndroid ? _visiblePhoneIds : isWindows ? _visiblePcIds : null,
+      itemIds: isAndroid
+          ? _visiblePhoneIds
+          : isWindows
+          ? _visiblePcIds
+          : null,
     );
   }
 
@@ -867,6 +1410,7 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
   void _refreshView({bool resetPaging = false}) {
     final repository = _repository;
     if (repository == null || _disposed) return;
+    _memories = null;
     final visibleIds = _visibleIds(repository);
     if (isAndroid && visibleIds.isEmpty) {
       _clearVisibleCatalogue();
@@ -890,16 +1434,34 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     _albums = repository.albums(limit: 500).items;
     _categories = repository.categories();
     if (isAndroid || isWindows) {
-      _albums = _albums.map((album) => album.copyWith(
-        itemIds: album.itemIds.where(visibleIds.contains),
-        coverItemId: visibleIds.contains(album.coverItemId) ? album.coverItemId : null,
-      )).toList(growable: false);
-      _categories = MediaKind.values.map((kind) {
-        final visible = repository.snapshot.items.where((item) =>
-          item.section == MediaSection.library && item.kind == kind && visibleIds.contains(item.id));
-        return CategorySummary(kind: kind, itemCount: visible.length,
-          totalBytes: visible.fold<int>(0, (sum, item) => sum + item.metadata.sizeBytes));
-      }).toList(growable: false);
+      _albums = _albums
+          .map(
+            (album) => album.copyWith(
+              itemIds: album.itemIds.where(visibleIds.contains),
+              coverItemId: visibleIds.contains(album.coverItemId)
+                  ? album.coverItemId
+                  : null,
+            ),
+          )
+          .toList(growable: false);
+      _categories = MediaKind.values
+          .map((kind) {
+            final visible = repository.snapshot.items.where(
+              (item) =>
+                  item.section == MediaSection.library &&
+                  item.kind == kind &&
+                  visibleIds.contains(item.id),
+            );
+            return CategorySummary(
+              kind: kind,
+              itemCount: visible.length,
+              totalBytes: visible.fold<int>(
+                0,
+                (sum, item) => sum + item.metadata.sizeBytes,
+              ),
+            );
+          })
+          .toList(growable: false);
     }
     if (_loadState != GalleryLoadState.starting &&
         _loadState != GalleryLoadState.loading &&
@@ -929,16 +1491,25 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
   Future<void> _readSettings() async {
     _preferencesStore = GalleryPreferencesStore(_dataDirectory!);
     final preferences = await _preferencesStore!.load();
+    if (_disposed) {
+      await _preferencesStore!.close();
+      return;
+    }
     _settings = preferences.settings;
-    _videoPositions..clear()..addAll(preferences.videoPositions);
+    _videoPositions
+      ..clear()
+      ..addAll(preferences.videoPositions);
     _windowsRoots
       ..clear()
       ..addAll(
-        preferences.roots.map((line) => line.trim()).where((line) => line.isNotEmpty),
+        preferences.roots
+            .map((line) => line.trim())
+            .where((line) => line.isNotEmpty),
       );
   }
 
   void _clearVisibleCatalogue() {
+    _memories = null;
     _indexedCount = 0;
     _discoveredCount = null;
     _items = const <MediaItem>[];
@@ -962,7 +1533,6 @@ final class NexGalleryRuntime extends ChangeNotifier implements GalleryModel {
     _errorMessage = '$message ${_friendlyError(error)}';
     _statusMessage = null;
     _loadState = GalleryLoadState.error;
-    _isIndexing = false;
     _safeNotify();
   }
 

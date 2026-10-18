@@ -20,6 +20,9 @@ class MediaTile extends StatelessWidget {
     required this.item,
     required this.model,
     required this.onAction,
+    this.onSelect,
+    this.selectionMode = false,
+    this.selected = false,
     super.key,
   });
 
@@ -27,65 +30,96 @@ class MediaTile extends StatelessWidget {
   final GalleryModel model;
   final ValueChanged<MediaTileAction> onAction;
 
+  /// Toggles multi-selection. Long press starts it; taps toggle while active.
+  final VoidCallback? onSelect;
+  final bool selectionMode;
+  final bool selected;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Semantics(
       button: true,
+      selected: selectionMode ? selected : null,
       label:
           '${item.name}, ${_kindLabel(item.kind)}'
           '${item.isAvailable ? '' : ', drive unavailable'}',
       child: Card(
         clipBehavior: Clip.antiAlias,
+        shape: selected
+            ? RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: scheme.primary, width: 3),
+              )
+            : null,
         child: InkWell(
-          onTap: () => onAction(MediaTileAction.open),
+          onTap: selectionMode && onSelect != null
+              ? onSelect
+              : () => onAction(MediaTileAction.open),
+          onLongPress: onSelect,
           child: Stack(
             fit: StackFit.expand,
             children: [
-              MediaThumbnail(item: item, model: model),
+              AnimatedPadding(
+                duration: const Duration(milliseconds: 120),
+                padding: EdgeInsets.all(selected ? 8 : 0),
+                child: MediaThumbnail(item: item, model: model),
+              ),
               Positioned(
                 top: 6,
                 left: 6,
-                child: _SourceBadge(source: item.source),
-              ),
-              Positioned(
-                top: 2,
-                right: 2,
-                child: PopupMenuButton<MediaTileAction>(
-                  tooltip: 'Actions for ${item.name}',
-                  onSelected: onAction,
-                  itemBuilder: (context) => _actions(item)
-                      .map(
-                        (entry) => PopupMenuItem<MediaTileAction>(
-                          value: entry.$1,
-                          enabled:
-                              item.isAvailable ||
-                              entry.$1 == MediaTileAction.open ||
-                              entry.$1 == MediaTileAction.favorite ||
-                              entry.$1 == MediaTileAction.addToAlbum ||
-                              entry.$1 == MediaTileAction.archive,
-                          child: Row(
-                            children: [
-                              Icon(entry.$2, size: 20),
-                              const SizedBox(width: 12),
-                              Text(entry.$3),
-                            ],
-                          ),
-                        ),
+                child: selectionMode
+                    ? Icon(
+                        selected
+                            ? Icons.check_circle_rounded
+                            : Icons.radio_button_unchecked_rounded,
+                        color: selected ? scheme.primary : Colors.white,
+                        shadows: const [Shadow(blurRadius: 4)],
                       )
-                      .toList(growable: false),
-                  icon: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: scheme.scrim.withValues(alpha: 0.54),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(5),
-                      child: Icon(Icons.more_vert_rounded, color: Colors.white),
+                    : _SourceBadge(source: item.source),
+              ),
+              if (!selectionMode)
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: PopupMenuButton<MediaTileAction>(
+                    tooltip: 'Actions for ${item.name}',
+                    onSelected: onAction,
+                    itemBuilder: (context) => _actions(item)
+                        .map(
+                          (entry) => PopupMenuItem<MediaTileAction>(
+                            value: entry.$1,
+                            enabled:
+                                item.isAvailable ||
+                                entry.$1 == MediaTileAction.open ||
+                                entry.$1 == MediaTileAction.favorite ||
+                                entry.$1 == MediaTileAction.addToAlbum ||
+                                entry.$1 == MediaTileAction.archive,
+                            child: Row(
+                              children: [
+                                Icon(entry.$2, size: 20),
+                                const SizedBox(width: 12),
+                                Text(entry.$3),
+                              ],
+                            ),
+                          ),
+                        )
+                        .toList(growable: false),
+                    icon: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: scheme.scrim.withValues(alpha: 0.54),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(5),
+                        child: Icon(
+                          Icons.more_vert_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
               Positioned(
                 left: 0,
                 right: 0,

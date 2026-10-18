@@ -730,6 +730,62 @@ class AndroidMediaBridge {
     return AndroidDocumentMutationResult.fromMap(value);
   }
 
+  Future<String> exportAppMedia(
+    String path, {
+    required String name,
+    required String mimeType,
+  }) async {
+    final value = await _invokeMap('exportAppMedia', {
+      'path': path,
+      'name': name,
+      'mimeType': mimeType,
+    });
+    return value['uri'] as String;
+  }
+
+  Future<AndroidDocumentMutationResult> copyDocument(
+    Uri uri,
+    Uri parentUri, {
+    bool move = false,
+  }) async => AndroidDocumentMutationResult.fromMap(
+    await _invokeMap('copyDocument', {
+      'uri': uri.toString(),
+      'parentUri': parentUri.toString(),
+      'move': move,
+    }),
+  );
+
+  Future<AndroidDocumentMutationResult> exportAppFile(
+    String path,
+    Uri parentUri, {
+    required String name,
+    String mimeType = 'application/octet-stream',
+  }) async => AndroidDocumentMutationResult.fromMap(
+    await _invokeMap('exportAppFile', {
+      'path': path,
+      'parentUri': parentUri.toString(),
+      'name': name,
+      'mimeType': mimeType,
+    }),
+  );
+
+  Future<void> archiveDocument(
+    Uri source,
+    Uri parent,
+    String name, {
+    bool extract = false,
+  }) async {
+    await _invokeMap(extract ? 'extractDocument' : 'zipDocument', {
+      'uri': source.toString(),
+      'parentUri': parent.toString(),
+      'name': name,
+    });
+  }
+
+  Future<void> setPrivacyScreen(bool enabled) async {
+    await _invokeMap('setPrivacyScreen', {'enabled': enabled});
+  }
+
   /// Encrypts a small credential with an AES-256-GCM key held by Android
   /// Keystore. Only ciphertext is written to the app's private preferences.
   Future<void> storeSecret(String key, String value) async {

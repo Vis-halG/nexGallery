@@ -3,8 +3,16 @@ import 'package:flutter/material.dart';
 import '../../core/catalog_models.dart';
 import '../../core/media_item.dart';
 import '../../src/gallery_model.dart';
+import '../../src/gallery_organizer.dart';
+import '../../src/gallery_tools.dart';
+import '../common/dialogs.dart';
+import '../common/media_tile.dart';
+import '../vault/vault_page.dart';
+import 'analysis_page.dart';
+import 'memories_page.dart';
+import 'storage_page.dart';
 
-class LibraryPage extends StatelessWidget {
+class LibraryPage extends StatefulWidget {
   const LibraryPage({
     required this.model,
     required this.onShowPhotos,
@@ -13,6 +21,26 @@ class LibraryPage extends StatelessWidget {
 
   final GalleryModel model;
   final VoidCallback onShowPhotos;
+
+  @override
+  State<LibraryPage> createState() => _LibraryPageState();
+}
+
+class _LibraryPageState extends State<LibraryPage> {
+  String _albumFilter = '';
+  Object? _byIdSource;
+  Map<String, MediaItem> _byId = const {};
+
+  GalleryModel get model => widget.model;
+  VoidCallback get onShowPhotos => widget.onShowPhotos;
+
+  List<MediaAlbum> get _albums => model.albums
+      .where(
+        (album) => album.name.toLowerCase().contains(
+          _albumFilter.trim().toLowerCase(),
+        ),
+      )
+      .toList();
 
   @override
   Widget build(BuildContext context) {
@@ -69,6 +97,19 @@ class LibraryPage extends StatelessWidget {
               padding: EdgeInsets.symmetric(horizontal: _padding(context)),
               sliver: SliverGrid(
                 delegate: SliverChildListDelegate.fixed([
+                  if (model is GalleryOrganizer)
+                    _CollectionCard(
+                      label: 'Memories',
+                      description: 'Moments made on this device',
+                      icon: Icons.auto_stories_rounded,
+                      color: const Color(0xFFE5533F),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => MemoriesPage(model: model),
+                        ),
+                      ),
+                    ),
                   _CollectionCard(
                     label: 'Favorites',
                     description: 'Items you marked',
@@ -95,25 +136,58 @@ class LibraryPage extends StatelessWidget {
                     description: 'Optional local AI pack',
                     icon: Icons.people_alt_rounded,
                     color: const Color(0xFF3F82E5),
-                    badge: 'Not installed',
-                    onTap: () => _showNotInstalled(context),
+                    onTap: () => _analysis(context, AnalysisKind.people),
                   ),
                   _CollectionCard(
                     label: 'Places',
                     description: 'From photo location',
                     icon: Icons.location_on_rounded,
                     color: const Color(0xFF2B9C76),
-                    badge: 'Coming later',
-                    onTap: () => _showNotInstalled(context),
+                    onTap: () => _analysis(context, AnalysisKind.places),
                   ),
                   _CollectionCard(
                     label: 'Cleanup',
-                    description: 'Duplicates and large files',
+                    description: 'Duplicates, look-alikes and large files',
                     icon: Icons.cleaning_services_rounded,
                     color: const Color(0xFFF08A3E),
-                    badge: 'Basic scan',
-                    onTap: () => _showNotInstalled(context),
+                    onTap: () => _analysis(context, AnalysisKind.cleanup),
                   ),
+                  _CollectionCard(
+                    label: 'Smart search',
+                    description: 'Find things and text in photos',
+                    icon: Icons.manage_search_rounded,
+                    color: const Color(0xFF8E5BD8),
+                    onTap: () => _analysis(context, AnalysisKind.search),
+                  ),
+                  if (model is GalleryOrganizer)
+                    _CollectionCard(
+                      label: 'Storage',
+                      description: 'Space used and cleanup ideas',
+                      icon: Icons.pie_chart_rounded,
+                      color: const Color(0xFF2B7BB9),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => StoragePage(model: model),
+                        ),
+                      ),
+                    ),
+                  if (model is GalleryTools)
+                    _CollectionCard(
+                      label: 'Locked Folder',
+                      description: 'Encrypted private copies',
+                      icon: Icons.lock_rounded,
+                      color: const Color(0xFF7065C8),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => VaultPage(
+                            tools: model as GalleryTools,
+                            model: model,
+                          ),
+                        ),
+                      ),
+                    ),
                 ]),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: _columns(context),
@@ -147,6 +221,22 @@ class LibraryPage extends StatelessWidget {
               ),
             ),
             _sectionTitle(context, 'Albums'),
+            if (model.albums.length > 6)
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  _padding(context),
+                  0,
+                  _padding(context),
+                  12,
+                ),
+                sliver: SliverToBoxAdapter(
+                  child: SearchBar(
+                    hintText: 'Search albums',
+                    leading: const Icon(Icons.search_rounded),
+                    onChanged: (value) => setState(() => _albumFilter = value),
+                  ),
+                ),
+              ),
             if (model.albums.isEmpty)
               SliverPadding(
                 padding: EdgeInsets.symmetric(horizontal: _padding(context)),
@@ -158,10 +248,11 @@ class LibraryPage extends StatelessWidget {
               SliverPadding(
                 padding: EdgeInsets.symmetric(horizontal: _padding(context)),
                 sliver: SliverList.separated(
-                  itemCount: model.albums.length,
+                  itemCount: _albums.length,
                   separatorBuilder: (_, _) => const SizedBox(height: 8),
                   itemBuilder: (context, index) {
-                    final album = model.albums[index];
+                    final album = _albums[index];
+                    final cover = _cover(album);
                     return Card(
                       child: ListTile(
                         minTileHeight: 68,
@@ -169,12 +260,40 @@ class LibraryPage extends StatelessWidget {
                           model.showAlbum(album.id);
                           onShowPhotos();
                         },
-                        leading: const CircleAvatar(
-                          child: Icon(Icons.photo_album_rounded),
+                        leading: SizedBox.square(
+                          dimension: 48,
+                          child: cover == null
+                              ? const CircleAvatar(
+                                  child: Icon(Icons.photo_album_rounded),
+                                )
+                              : ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: MediaThumbnail(
+                                    item: cover,
+                                    model: model,
+                                    size: 160,
+                                  ),
+                                ),
                         ),
                         title: Text(album.name),
                         subtitle: Text('${album.itemIds.length} items'),
-                        trailing: const Icon(Icons.chevron_right_rounded),
+                        trailing: model is GalleryOrganizer && !album.isReadOnly
+                            ? PopupMenuButton<String>(
+                                tooltip: 'Album actions',
+                                onSelected: (action) =>
+                                    _albumAction(album, action),
+                                itemBuilder: (_) => const [
+                                  PopupMenuItem(
+                                    value: 'rename',
+                                    child: Text('Rename'),
+                                  ),
+                                  PopupMenuItem(
+                                    value: 'delete',
+                                    child: Text('Delete album'),
+                                  ),
+                                ],
+                              )
+                            : const Icon(Icons.chevron_right_rounded),
                       ),
                     );
                   },
@@ -203,6 +322,55 @@ class LibraryPage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// The chosen cover, else the newest accessible member.
+  MediaItem? _cover(MediaAlbum album) {
+    if (model is! GalleryTools) return null;
+    final ids = album.coverItemId != null
+        ? [album.coverItemId!, ...album.itemIds.reversed]
+        : album.itemIds.reversed;
+    // The runtime publishes a new album list per catalogue change.
+    if (!identical(_byIdSource, model.albums)) {
+      _byIdSource = model.albums;
+      _byId = {
+        for (final item in (model as GalleryTools).localItems) item.id: item,
+      };
+    }
+    final byId = _byId;
+    for (final id in ids) {
+      final item = byId[id];
+      if (item != null &&
+          (item.kind == MediaKind.image || item.kind == MediaKind.video)) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _albumAction(MediaAlbum album, String action) async {
+    final organizer = model as GalleryOrganizer;
+    try {
+      if (action == 'rename') {
+        final name = await promptText(
+          context,
+          title: 'Rename album',
+          label: 'Album name',
+          initialValue: album.name,
+        );
+        if (name != null) await organizer.renameAlbum(album.id, name);
+      } else if (action == 'delete') {
+        final confirmed = await confirmAction(
+          context,
+          title: 'Delete "${album.name}"?',
+          message: 'Only the album is removed. Its photos and videos stay in your library.',
+          action: 'Delete album',
+        );
+        if (confirmed) await organizer.deleteAlbum(album.id);
+      }
+    } catch (error) {
+      if (mounted) showMessage(context, friendlyError(error));
+    }
   }
 
   void _showCollection(GalleryCollection collection) {
@@ -244,14 +412,24 @@ class LibraryPage extends StatelessWidget {
     }
   }
 
-  void _showNotInstalled(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'This intelligence module is not installed yet. Your files stay local.',
+  void _analysis(BuildContext context, AnalysisKind kind) {
+    if (model is GalleryTools) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AnalysisPage(
+            kind: kind,
+            model: model,
+            tools: model as GalleryTools,
+            onSearch: (query) {
+              model.showCollection(GalleryCollection.timeline);
+              model.setSearchText(query);
+              onShowPhotos();
+            },
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
 
   double _padding(BuildContext context) =>
@@ -273,7 +451,6 @@ class _CollectionCard extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.onTap,
-    this.badge,
   });
 
   final String label;
@@ -281,7 +458,6 @@ class _CollectionCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  final String? badge;
 
   @override
   Widget build(BuildContext context) {
@@ -303,27 +479,6 @@ class _CollectionCard extends StatelessWidget {
                     foregroundColor: color,
                     child: Icon(icon),
                   ),
-                  if (badge case final badge?)
-                    Flexible(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          badge,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelSmall,
-                        ),
-                      ),
-                    ),
                 ],
               ),
               const SizedBox(height: 12),

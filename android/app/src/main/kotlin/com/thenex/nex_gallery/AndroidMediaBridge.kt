@@ -6,6 +6,7 @@ import android.app.RecoverableSecurityException
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -25,6 +26,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Size
+import android.view.WindowManager
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import io.flutter.plugin.common.BinaryMessenger
@@ -69,6 +71,7 @@ class AndroidMediaBridge(
     private var consentDeletedCount = 0
     private var directoryPickerResult: MethodChannel.Result? = null
     private var documentPickerResult: MethodChannel.Result? = null
+    private val videoEditor = VideoEditor(activity)
     private val secretLock = Any()
     private val cacheFileLock = Any()
 
@@ -99,6 +102,19 @@ class AndroidMediaBridge(
                 "createDirectory" -> runAsync(result) { createDirectory(call) }
                 "renameDocument" -> runAsync(result) { renameDocument(call) }
                 "deleteDocument" -> runAsync(result) { deleteDocument(call) }
+                "zipDocument" -> runAsync(result) { SafArchives(resolver).zip(call) }
+                "extractDocument" -> runAsync(result) { SafArchives(resolver).extract(call) }
+                "copyDocument" -> runAsync(result) { copyDocument(call) }
+                "exportAppFile" -> runAsync(result) { exportAppFile(call) }
+                "exportAppMedia" -> runAsync(result) { exportAppMedia(call) }
+                "editVideo" -> videoEditor.start(call, result)
+                "cancelVideoEdit" -> { videoEditor.cancel(); result.success(null) }
+                "setPrivacyScreen" -> {
+                    if (call.argument<Boolean>("enabled") == true) {
+                        activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    } else { activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+                    result.success(mapOf("status" to "completed"))
+                }
                 "storeSecret" -> runAsync(result) { storeSecret(call) }
                 "readSecret" -> runAsync(result) { readSecret(call) }
                 "deleteSecret" -> runAsync(result) { deleteSecret(call) }
@@ -123,6 +139,7 @@ class AndroidMediaBridge(
 
     fun dispose() {
         channel.setMethodCallHandler(null)
+        videoEditor.cancel()
         worker.shutdownNow()
         permissionResult?.error("activity_destroyed", "Activity closed during permission request", null)
         permissionResult = null
@@ -903,7 +920,7 @@ class AndroidMediaBridge(
     }
 
     private fun persistedDirectories(): List<Map<String, Any?>> =
-        resolver.persistedUriPermissions.map { permission ->
+        resolver.persistedUriPermissions.filter { DocumentsContract.isTreeUri(it.uri) }.map { permission ->
             directoryDescriptor(permission.uri, "persisted", persisted = true) +
                 mapOf(
                     "canRead" to permission.isReadPermission,
@@ -1016,6 +1033,98 @@ class AndroidMediaBridge(
             "status" to if (deleted) "completed" else "failed",
             "uri" to uri.toString(),
         )
+    }
+
+    private fun exportAppMedia(call: MethodCall): Map<String, Any?> {
+        val file = validatedAppFile(call.argument<String>("path"))
+        val name = validatedDocumentName(call.argument<String>("name"))
+        val mime = call.argument<String>("mimeType") ?: "image/png"
+        if (mime != "image/png" && mime != "video/mp4") throw BridgeException("invalid_mime", "Only image and video exports are supported")
+        val video = mime == "video/mp4"
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, if (video) "Movies/nexGallery" else "Pictures/nexGallery")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(if (video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES), "nexGallery")
+                if (!dir.exists() && !dir.mkdirs()) throw BridgeException("export_failed", "Could not create the export folder")
+                val target = File(dir, name)
+                if (target.exists()) throw BridgeException("destination_exists", "Export destination exists")
+                @Suppress("DEPRECATION")
+                put(MediaStore.MediaColumns.DATA, target.absolutePath)
+            }
+        }
+        val collection = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val uri = resolver.insert(collection, values) ?: throw BridgeException("export_failed", "Android could not create an exported copy")
+        try {
+            resolver.openOutputStream(uri, "w")?.use { output -> file.inputStream().use { it.copyTo(output) } }
+                ?: throw BridgeException("export_failed", "Android could not write the copy")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            }
+        } catch (error: Exception) { resolver.delete(uri, null, null); throw error }
+        return mapOf("status" to "completed", "uri" to uri.toString())
+    }
+
+    private fun exportAppFile(call: MethodCall): Map<String, Any?> {
+        val file = validatedAppFile(call.argument<String>("path"))
+        val parent = validatedTreeUri(call.argument<String>("parentUri"))
+        val name = validatedDocumentName(call.argument<String>("name"))
+        val mime = call.argument<String>("mimeType") ?: "application/octet-stream"
+        ensureNoChild(parent, name)
+        val uri = DocumentsContract.createDocument(resolver, documentUri(parent), mime, name)
+            ?: throw BridgeException("export_failed", "This provider cannot create files")
+        try {
+            resolver.openOutputStream(uri, "w")?.use { output -> file.inputStream().use { it.copyTo(output) } }
+                ?: throw BridgeException("export_failed", "The provider could not write this file")
+        } catch (error: Exception) { DocumentsContract.deleteDocument(resolver, uri); throw error }
+        return mapOf("status" to "completed", "uri" to uri.toString(), "name" to name)
+    }
+
+    private fun ensureNoChild(parent: Uri, name: String) {
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(parent, documentId(parent))
+        resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                if (cursor.getString(0).equals(name, ignoreCase = true)) throw BridgeException("destination_exists", "An item with this name already exists")
+            }
+        } ?: throw BridgeException("provider_unavailable", "Could not check the destination folder")
+    }
+
+    private fun copyDocument(call: MethodCall): Map<String, Any?> {
+        val source = validatedTreeUri(call.argument<String>("uri"))
+        val parent = validatedTreeUri(call.argument<String>("parentUri"))
+        SafArchives(resolver).rejectDescendant(source, parent)
+        var count = 0
+        fun copyOne(input: Uri, destination: Uri, depth: Int): Uri {
+            if (++count > 100000 || depth > 64) throw BridgeException("copy_limit", "The folder is too large or too deep")
+            val name = validatedDocumentName(documentDisplayName(documentUri(input)))
+            val mime = resolver.getType(documentUri(input)) ?: "application/octet-stream"
+            ensureNoChild(destination, name)
+            val rawCreated = DocumentsContract.createDocument(resolver, documentUri(destination), mime, name)
+                ?: throw BridgeException("copy_failed", "The provider could not create the copy")
+            val created = DocumentsContract.buildDocumentUriUsingTree(destination, documentId(rawCreated))
+            try {
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(input, documentId(input))
+                    resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null)?.use { cursor ->
+                        while (cursor.moveToNext()) { copyOne(DocumentsContract.buildDocumentUriUsingTree(input, cursor.getString(0)), created, depth + 1) }
+                    } ?: throw BridgeException("copy_failed", "Could not read the source folder")
+                } else {
+                    resolver.openInputStream(documentUri(input))?.use { stream ->
+                        resolver.openOutputStream(created, "w")?.use { output -> stream.copyTo(output) }
+                            ?: throw BridgeException("copy_failed", "Could not write the copy")
+                    } ?: throw BridgeException("copy_failed", "Could not read the source file")
+                }
+                return created
+            } catch (error: Exception) { DocumentsContract.deleteDocument(resolver, created); throw error }
+        }
+        val copied = copyOne(source, parent, 0)
+        if (call.argument<Boolean>("move") == true && !DocumentsContract.deleteDocument(resolver, documentUri(source))) {
+            throw BridgeException("move_partial", "The copy was saved, but the provider could not delete the original")
+        }
+        return mapOf("status" to "completed", "uri" to copied.toString(), "name" to documentDisplayName(copied))
     }
 
     private fun documentDisplayName(uri: Uri): String? =

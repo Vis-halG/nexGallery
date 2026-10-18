@@ -232,6 +232,31 @@ final class MediaItem {
   );
 }
 
+/// User corrections live in `user.*` attributes so rescans cannot undo them.
+const userTakenAtKey = 'user.takenAt';
+const userLatitudeKey = 'user.latitude';
+const userLongitudeKey = 'user.longitude';
+const userNoLocationKey = 'user.noLocation';
+
+MediaMetadata withUserOverrides(MediaMetadata metadata) {
+  final attributes = metadata.attributes;
+  var result = metadata;
+  final takenAt = DateTime.tryParse(attributes[userTakenAtKey] ?? '');
+  if (takenAt != null) result = result.copyWith(takenAt: takenAt.toUtc());
+  if (attributes[userNoLocationKey] == 'true') {
+    return result.copyWith(latitude: null, longitude: null);
+  }
+  final latitude = double.tryParse(attributes[userLatitudeKey] ?? '');
+  final longitude = double.tryParse(attributes[userLongitudeKey] ?? '');
+  if (latitude != null &&
+      longitude != null &&
+      latitude.abs() <= 90 &&
+      longitude.abs() <= 180) {
+    result = result.copyWith(latitude: latitude, longitude: longitude);
+  }
+  return result;
+}
+
 const Object _unset = Object();
 
 T _enumByName<T extends Enum>(List<T> values, Object? name, T fallback) {
@@ -267,3 +292,41 @@ Map<String, Object?> _objectMap(Object? value) => value is Map
         (key, value) => MapEntry<String, Object?>(key.toString(), value),
       )
     : <String, Object?>{};
+
+/// Whether [a] and [b] hold the same catalogue state. Unchanged items keep
+/// their object, so saves can skip them.
+bool sameMediaItem(MediaItem a, MediaItem b) =>
+    identical(a, b) ||
+    (a.id == b.id &&
+        a.name == b.name &&
+        a.uri == b.uri &&
+        a.relativePath == b.relativePath &&
+        a.kind == b.kind &&
+        a.source == b.source &&
+        a.section == b.section &&
+        a.isFavorite == b.isFavorite &&
+        a.isAvailable == b.isAvailable &&
+        a.thumbnailUri == b.thumbnailUri &&
+        a.indexedAt == b.indexedAt &&
+        a.deletedAt == b.deletedAt &&
+        _sameJson(a.metadata.toJson(), b.metadata.toJson()));
+
+bool _sameJson(Object? a, Object? b) {
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      if (!b.containsKey(entry.key) || !_sameJson(entry.value, b[entry.key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_sameJson(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return a == b;
+}

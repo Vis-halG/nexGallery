@@ -125,6 +125,18 @@ WindowsFilesChannel::WindowsFilesChannel(flutter::BinaryMessenger* messenger,
           result->Success(EncodableValue(selected));
           return;
         }
+        if (call.method_name() == "setPrivacyScreen") {
+          const auto* arguments = call.arguments() == nullptr ? nullptr : std::get_if<EncodableMap>(call.arguments());
+          const auto entry = arguments == nullptr ? EncodableMap::const_iterator() : arguments->find(EncodableValue("enabled"));
+          const auto* enabled = arguments == nullptr || entry == arguments->end() ? nullptr : std::get_if<bool>(&entry->second);
+          if (enabled == nullptr) { result->Error("invalid_argument", "Provide enabled."); return; }
+          // WDA_EXCLUDEFROMCAPTURE on Windows 10 2004+, WDA_MONITOR on older builds.
+          if (!SetWindowDisplayAffinity(owner_, *enabled ? 0x00000011 : WDA_NONE) &&
+              !SetWindowDisplayAffinity(owner_, *enabled ? WDA_MONITOR : WDA_NONE)) {
+            result->Error("privacy_failed", "Windows could not protect this window from capture."); return;
+          }
+          result->Success(); return;
+        }
         if (call.method_name() == "fileIdentities") {
           const auto* arguments = call.arguments() == nullptr
                                       ? nullptr

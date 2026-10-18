@@ -51,7 +51,13 @@ final class GalleryPreferences {
         'Invalid settings, folders or video positions.',
       );
     }
-    for (final key in <String>['autoRefresh', 'includeHiddenFiles']) {
+    for (final key in <String>[
+      'autoRefresh',
+      'includeHiddenFiles',
+      'analyzeOnlyWhileCharging',
+      'transfersOnWifiOnly',
+      'cameraBackup',
+    ]) {
       if (rawSettings.containsKey(key) && rawSettings[key] is! bool) {
         throw FormatException('Invalid $key setting.');
       }
