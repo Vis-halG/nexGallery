@@ -122,6 +122,7 @@ final class TransferQueue extends ChangeNotifier {
     this.resolveSource,
     this.onFinished,
     this.allowedJob,
+    this.journalOwner,
     this.download,
     this.retryDelay = const Duration(seconds: 30),
     this.chunkBytes = 4 * 1024 * 1024,
@@ -141,6 +142,35 @@ final class TransferQueue extends ChangeNotifier {
 
   /// Background sessions may process only the categories the owner enabled.
   final bool Function(TransferJob job)? allowedJob;
+  final bool Function()? journalOwner;
+  bool _ready = false;
+  int _mutations = 0;
+  Completer<void>? _mutationsIdle;
+  bool get canMutate =>
+      !_closed &&
+      !_handoff &&
+      !_writeBlocked &&
+      (journalOwner == null || (_ready && journalOwner!()));
+
+  Future<T> _mutate<T>(Future<T> Function() work) {
+    if (!canMutate) {
+      return Future.error(
+        StateError(
+          'Transfers are changing ownership. Try again after reconnecting.',
+        ),
+      );
+    }
+    _mutations++;
+    return Future<T>.sync(work).whenComplete(() {
+      if (--_mutations == 0) {
+        _mutationsIdle?.complete();
+        _mutationsIdle = null;
+      }
+    });
+  }
+
+  /// Include app-private cache edits in the same handoff drain as enqueues.
+  Future<T> withOwnership<T>(Future<T> Function() work) => _mutate(work);
 
   bool canRun(TransferJob job) => allowedJob?.call(job) ?? true;
 
@@ -176,9 +206,16 @@ final class TransferQueue extends ChangeNotifier {
       Directory(p.join(directory.path, job.id));
 
   Future<void> load() async {
+    if (journalOwner != null && !journalOwner!()) {
+      throw StateError('The transfer session does not own the journal.');
+    }
+    _ready = false;
     try {
       await _load();
       _writeBlocked = false;
+      _ready = true;
+      _handoff = false;
+      notifyListeners();
     } catch (_) {
       _writeBlocked = true;
       rethrow;
@@ -255,9 +292,16 @@ final class TransferQueue extends ChangeNotifier {
     _client = null;
     _retry?.cancel();
     if (_current != null) _stop ??= _Stop.handoff;
+    // A progress listener may initiate handoff. Rebuild after that callback
+    // returns instead of recursively entering the same listener.
+    scheduleMicrotask(notifyListeners);
   }
 
   Future<void> flush() async {
+    while (_mutations > 0) {
+      _mutationsIdle ??= Completer<void>();
+      await _mutationsIdle!.future;
+    }
     while (_processing) {
       await _idle?.future;
     }
@@ -265,14 +309,14 @@ final class TransferQueue extends ChangeNotifier {
     _handoff = false;
   }
 
-  Future<void> pruneFinished({int keep = 200}) async {
+  Future<void> pruneFinished({int keep = 200}) => _mutate(() async {
     final done = _jobs.where((v) => v.isFinished).toList();
     if (done.length <= keep) return;
     final remove = done.take(done.length - keep).map((v) => v.id).toSet();
     _jobs.removeWhere((v) => remove.contains(v.id));
     await _save();
     notifyListeners();
-  }
+  });
 
   @override
   void notifyListeners() {
@@ -305,7 +349,7 @@ final class TransferQueue extends ChangeNotifier {
     bool moveSource = false,
     ConflictPolicy policy = ConflictPolicy.ask,
     String? origin,
-  }) async {
+  }) => _mutate(() async {
     if ((source == null) == (sourceItemId == null)) {
       throw ArgumentError('Give either a source file or a gallery item.');
     }
@@ -343,13 +387,13 @@ final class TransferQueue extends ChangeNotifier {
     notifyListeners();
     _kick();
     return job;
-  }
+  });
 
   Future<TransferJob> enqueueDownload({
     required RemoteEntry entry,
     required File destination,
     String? origin,
-  }) async {
+  }) => _mutate(() async {
     final existing = _jobs.where(
       (job) =>
           job.kind == TransferKind.download &&
@@ -375,9 +419,10 @@ final class TransferQueue extends ChangeNotifier {
     notifyListeners();
     _kick();
     return job;
-  }
+  });
 
   void pause(String id) {
+    if (!canMutate) return;
     final job = _find(id);
     if (job == null) return;
     if (identical(job, _current)) {
@@ -390,6 +435,7 @@ final class TransferQueue extends ChangeNotifier {
   }
 
   void resume(String id) {
+    if (!canMutate) return;
     final job = _find(id);
     if (job == null) return;
     if (job.status == TransferStatus.paused ||
@@ -415,7 +461,7 @@ final class TransferQueue extends ChangeNotifier {
     }
   }
 
-  Future<void> cancel(String id) async {
+  Future<void> cancel(String id) => _mutate(() async {
     final job = _find(id);
     if (job == null) return;
     if (identical(job, _current)) {
@@ -423,10 +469,11 @@ final class TransferQueue extends ChangeNotifier {
       return;
     }
     await _remove(job);
-  }
+  });
 
   /// Answers a conflict and requeues the upload.
   void resolveConflict(String id, ConflictPolicy policy) {
+    if (!canMutate) return;
     final job = _find(id);
     if (job == null || job.status != TransferStatus.conflict) return;
     job
@@ -438,11 +485,11 @@ final class TransferQueue extends ChangeNotifier {
     _kick();
   }
 
-  Future<void> clearFinished() async {
+  Future<void> clearFinished() => _mutate(() async {
     for (final job in _jobs.where((job) => job.isFinished).toList()) {
       await _remove(job);
     }
-  }
+  });
 
   Future<void> _remove(TransferJob job) async {
     _jobs.remove(job);

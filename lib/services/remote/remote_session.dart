@@ -93,6 +93,7 @@ final class RemoteSession extends ChangeNotifier {
       networkGate: _networkGate,
       resolveSource: _materialize,
       onFinished: _finished,
+      journalOwner: () => _ownsSession,
       allowedJob: (job) =>
           !background ||
           (job.origin?.startsWith('camera:') == true
@@ -113,6 +114,7 @@ final class RemoteSession extends ChangeNotifier {
   bool _ownsSession = false, _disposed = false, _notifierDisposed = false;
   Future<void>? _closing;
   Future<void>? _deactivating;
+  Future<void>? _initializing;
   Future<int>? _backingUp;
   Future<void> _backupSaving = Future.value();
   Completer<void>? _operationDone;
@@ -199,9 +201,26 @@ final class RemoteSession extends ChangeNotifier {
   Future<void> initialize() async {
     await _deactivating;
     if (_disposed) return;
+    if (_initializing case final running?) return running;
+    final work = _initialize();
+    _initializing = work;
+    try {
+      await work;
+    } finally {
+      _initializing = null;
+    }
+  }
+
+  Future<void> _initialize() async {
+    final epoch = _epoch;
     if (!_ownsSession) {
       for (var attempt = 0; attempt < (background ? 1 : 60); attempt++) {
+        if (epoch != _epoch || _disposed) return;
         if (await _device.claimTransferSession(_owner)) {
+          if (epoch != _epoch || _disposed) {
+            await _device.releaseTransferSession(_owner);
+            return;
+          }
           _ownsSession = true;
           break;
         }
@@ -257,7 +276,9 @@ final class RemoteSession extends ChangeNotifier {
       await secrets.delete(_secretKey);
     }
     notifyListeners();
-    if (_saved != null) await reconnect();
+    if (_saved != null && _ownsSession && epoch == _epoch && !_disposed) {
+      await reconnect();
+    }
   }
 
   void _modelChanged() {
@@ -283,6 +304,11 @@ final class RemoteSession extends ChangeNotifier {
     _client = null;
     _info = null;
     try {
+      try {
+        await _initializing;
+      } catch (_) {
+        // Initialization may be cancelled by this ownership transition.
+      }
       await _operationDone?.future;
       try {
         await _backingUp;
@@ -502,7 +528,15 @@ final class RemoteSession extends ChangeNotifier {
     }
     queue.client = client;
     notifyListeners();
-    unawaited(backUpCamera());
+    unawaited(
+      backUpCamera().catchError((Object error) {
+        if (_ownsSession && identical(_client, client) && !_disposed) {
+          _error = 'Camera backup paused: $error';
+          notifyListeners();
+        }
+        return 0;
+      }),
+    );
   }
 
   Future<void> _updateConnectionLabel() async {
@@ -766,7 +800,8 @@ final class RemoteSession extends ChangeNotifier {
   Future<TransferJob> keepOffline(RemoteEntry entry) =>
       queue.enqueueDownload(entry: entry, destination: offlineFile(entry));
 
-  Future<List<OfflineMedia>> offlineFiles() => _offline.files();
+  Future<List<OfflineMedia>> offlineFiles() =>
+      queue.withOwnership(_offline.files);
 
   Directory get _offlineViews => Directory(
     p.join(
@@ -803,7 +838,7 @@ final class RemoteSession extends ChangeNotifier {
     return total;
   }
 
-  Future<void> clearOffline() async {
+  Future<void> clearOffline() => queue.withOwnership(() async {
     if (queue.jobs.any(
       (v) => v.kind == TransferKind.download && !v.isFinished,
     )) {
@@ -818,7 +853,7 @@ final class RemoteSession extends ChangeNotifier {
     await secrets.delete('remote.offline.aes256.v1');
     _offlineKeyFuture = null;
     notifyListeners();
-  }
+  });
 
   @override
   void dispose() {

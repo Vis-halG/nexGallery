@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -29,8 +30,11 @@ class _Secrets implements SecretStore {
 
 class _Lease extends DeviceBridge {
   String? owner;
+  Completer<void>? gate, began;
   @override
   Future<bool> claimTransferSession(String value) async {
+    if (began != null && !began!.isCompleted) began!.complete();
+    await gate?.future;
     if (owner != null && owner != value) return false;
     owner = value;
     return true;
@@ -155,6 +159,27 @@ void main() {
     );
   }
 
+  test(
+    'pausing during a delayed lease claim drains coalesced initialization',
+    () async {
+      lease.gate = Completer<void>();
+      lease.began = Completer<void>();
+      final foreground = open();
+      final first = foreground.initialize();
+      final second = foreground.initialize();
+      await lease.began!.future;
+      final stopped = foreground.deactivate();
+      lease.gate!.complete();
+      await Future.wait([first, second, stopped]);
+      expect(lease.owner, isNull);
+      expect(foreground.ownsSession, isFalse);
+      expect(foreground.queue.canMutate, isFalse);
+      await foreground.initialize();
+      expect(foreground.ownsSession, isTrue);
+      expect(foreground.isConnected, isTrue);
+    },
+  );
+
   test('background cannot touch the foreground journal until ownership is handed over, and foreground reloads completed work', () async {
     final original = await File('${directory.path}/camera.jpg')
         .writeAsString('owner camera media');
@@ -168,8 +193,22 @@ void main() {
     final background = open(source: source, background: true);
     await background.initialize();
     expect(background.ownsSession, isFalse);
+    expect(background.queue.canMutate, isFalse);
+    final selected = await File('${directory.path}/selected.txt')
+        .writeAsString('selected');
+    await expectLater(
+      background.queue.enqueueUpload(
+        name: 'selected.txt',
+        root: 'pc',
+        remotePath: 'selected.txt',
+        source: selected,
+      ),
+      throwsStateError,
+    );
+    expect(await selected.readAsString(), 'selected');
     expect(shared.listSync(), isEmpty);
     await foreground.deactivate();
+    expect(foreground.queue.canMutate, isFalse);
     await background.initialize();
     expect(background.ownsSession, isTrue);
     await settle(background);

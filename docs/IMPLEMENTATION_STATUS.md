@@ -71,6 +71,9 @@ notification and cancellation. A native lease prevents the UI and worker from
 writing the transfer journal concurrently. The two background opt-ins are
 independent; user-paused work stays paused. Android controls actual execution
 time, and OEM/physical-device battery testing remains external.
+Journal mutations reject stale screens without ownership, and handoff drains
+file staging/cache edits plus coalesced initialization before releasing the
+native lease. Regression tests cover pausing during a delayed lease claim.
 
 Remote offline copies and resumable staging files use chunked AES-256-GCM
 with an OS-protected key. Legacy complete copies migrate before plaintext is

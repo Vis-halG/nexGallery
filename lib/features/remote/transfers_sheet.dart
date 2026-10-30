@@ -45,17 +45,17 @@ class TransfersSheet extends StatelessWidget {
                   ),
                   if (active > 0) ...[
                     TextButton(
-                      onPressed: queue.pauseAll,
+                      onPressed: queue.canMutate ? queue.pauseAll : null,
                       child: const AppText('Pause all'),
                     ),
                     TextButton(
-                      onPressed: queue.resumeAll,
+                      onPressed: queue.canMutate ? queue.resumeAll : null,
                       child: const AppText('Resume all'),
                     ),
                   ],
                   if (jobs.any((job) => job.isFinished))
                     TextButton(
-                      onPressed: queue.clearFinished,
+                      onPressed: queue.canMutate ? queue.clearFinished : null,
                       child: const AppText('Clear finished'),
                     ),
                 ],
@@ -147,7 +147,9 @@ class _TransferTile extends StatelessWidget {
                     job.status == TransferStatus.queued)
                   IconButton(
                     tooltip: context.tr('Pause'),
-                    onPressed: () => queue.pause(job.id),
+                    onPressed: queue.canMutate
+                        ? () => queue.pause(job.id)
+                        : null,
                     icon: const Icon(Icons.pause_rounded),
                   ),
                 if (job.status == TransferStatus.paused ||
@@ -156,7 +158,9 @@ class _TransferTile extends StatelessWidget {
                     tooltip: job.status == TransferStatus.failed
                         ? 'Retry'
                         : 'Resume',
-                    onPressed: () => queue.resume(job.id),
+                    onPressed: queue.canMutate
+                        ? () => queue.resume(job.id)
+                        : null,
                     icon: Icon(
                       job.status == TransferStatus.failed
                           ? Icons.refresh_rounded
@@ -166,7 +170,9 @@ class _TransferTile extends StatelessWidget {
                 if (!job.isFinished)
                   IconButton(
                     tooltip: context.tr('Cancel'),
-                    onPressed: () => queue.cancel(job.id),
+                    onPressed: queue.canMutate
+                        ? () => queue.cancel(job.id)
+                        : null,
                     icon: const Icon(Icons.close_rounded),
                   ),
               ],
@@ -182,18 +188,28 @@ class _TransferTile extends StatelessWidget {
                 spacing: 8,
                 children: [
                   TextButton(
-                    onPressed: () =>
-                        queue.resolveConflict(job.id, ConflictPolicy.keepBoth),
+                    onPressed: queue.canMutate
+                        ? () => queue.resolveConflict(
+                            job.id,
+                            ConflictPolicy.keepBoth,
+                          )
+                        : null,
                     child: const AppText('Keep both'),
                   ),
                   TextButton(
-                    onPressed: () =>
-                        queue.resolveConflict(job.id, ConflictPolicy.replace),
+                    onPressed: queue.canMutate
+                        ? () => queue.resolveConflict(
+                            job.id,
+                            ConflictPolicy.replace,
+                          )
+                        : null,
                     child: const AppText('Replace'),
                   ),
                   TextButton(
-                    onPressed: () =>
-                        queue.resolveConflict(job.id, ConflictPolicy.skip),
+                    onPressed: queue.canMutate
+                        ? () =>
+                              queue.resolveConflict(job.id, ConflictPolicy.skip)
+                        : null,
                     child: const AppText('Skip'),
                   ),
                 ],

@@ -70,6 +70,51 @@ void main() {
     chunkBytes: chunkBytes,
   );
 
+  test(
+    'handoff drains an enqueue already staging and rejects stale UI edits',
+    () async {
+      var owns = true;
+      final folder = Directory(p.join(workspace.path, 'ownership-queue'));
+      final queue = TransferQueue(folder, journalOwner: () => owns);
+      addTearDown(queue.dispose);
+      await queue.load();
+      final source = await localFile('selected.txt', 'selected media');
+      final pending = queue.enqueueUpload(
+        name: 'selected.txt',
+        root: 'pc',
+        remotePath: 'selected.txt',
+        source: source,
+      );
+      queue.beginHandoff();
+      owns = false;
+      await queue.flush();
+      expect(queue.canMutate, isFalse);
+      final next = TransferQueue(folder);
+      addTearDown(next.dispose);
+      await next.load();
+      expect(next.jobs, hasLength(1));
+      expect(
+        await File(next.jobs.single.localPath!).readAsString(),
+        'selected media',
+      );
+      final job = await pending;
+      queue.pause(job.id);
+      expect(job.status, TransferStatus.queued);
+      await expectLater(queue.cancel(job.id), throwsStateError);
+      await expectLater(
+        queue.enqueueUpload(
+          name: 'stale.txt',
+          root: 'pc',
+          remotePath: 'stale.txt',
+          source: source,
+        ),
+        throwsStateError,
+      );
+      expect(await source.readAsString(), 'selected media');
+      expect(next.jobs.single.id, job.id);
+    },
+  );
+
   test('uploads into new folders and reports completion', () async {
     final finished = <String>[];
     final queue = newQueue(finished: (job) => finished.add(job.name));
