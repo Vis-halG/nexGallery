@@ -81,7 +81,19 @@ final class RemoteCatalogIndex {
       }
       final uri = Uri.tryParse(item.uri);
       if (uri == null || uri.scheme != 'file') continue;
-      final path = File.fromUri(uri).absolute.path;
+      var path = File.fromUri(uri).absolute.path;
+      if (!guard.roots.values.any(
+        (root) => p.isWithin(root.canonicalPath, path),
+      )) {
+        // Windows can return an 8.3 path (RUNNER~1, for example) for TEMP
+        // while the guard holds the long canonical path. Resolve aliases
+        // before filtering, then still authorize through PathGuard below.
+        try {
+          path = await File(path).resolveSymbolicLinks();
+        } on FileSystemException {
+          continue;
+        }
+      }
       for (final root in guard.roots.values) {
         if (!p.isWithin(root.canonicalPath, path)) continue;
         final relative = p

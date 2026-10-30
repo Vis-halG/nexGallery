@@ -11,7 +11,7 @@ Local checks:
 - Full analyzer passed without issues. The final unit/widget suite passed
   all 236 tests, including independent background opt-ins.
 - Signed local ARM32/ARM64 APK compilation passed (21.5/22.5 MB). Resolved
-  Pub/Maven OSV audit passed 173 versions after upgrading transitive Guava
+  Pub/Maven OSV audit passed 172 versions after upgrading transitive Guava
   to 33.7.2-android for GHSA-xxph-c9ww-hj94. Release CI rebuilds that native graph.
 - API 35 real native tests passed both the WorkManager headless callback
   (context-backed platform channels and Keystore) and catalogue/Hindi/map test.
@@ -47,6 +47,8 @@ The compiled Windows agent must be built using `dart build cli`, which bundles
 SQLite code assets. The installer preserves its `server/bin` and `server/lib`
 layout. The compiled-agent smoke test now reads the real desktop SQLite catalogue
 and authorized albums over pinned TLS, so a missing native library fails the gate.
+The same compiled smoke passed with Windows TEMP redirected through an 8.3
+folder alias, reproducing and fixing CI's long/short-path catalogue mismatch.
 
 Release CI runs the new native test on APIs 24, 29, 33 and 36, builds the native
 Windows app/installer, and validates artifacts before publishing. Consult the

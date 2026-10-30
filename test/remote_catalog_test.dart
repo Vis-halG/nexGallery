@@ -125,6 +125,24 @@ void main() {
     expect(jsonEncode(people), isNot(contains('Hidden name')));
   });
 
+  test(
+    'canonical folder aliases retain catalogue albums and metadata',
+    () async {
+      final alias = Link('${workspace.path}/alias');
+      await alias.create(photos.path);
+      snapshot = CatalogSnapshot(
+        items: [item(0, Directory(alias.path))],
+        albums: snapshot.albums,
+        savedAt: snapshot.savedAt,
+      );
+      final page = await index.page('item', {}, identity);
+      expect((page['items'] as List).single['name'], 'photo-0.jpg');
+      final albums = await index.page('album', {}, identity);
+      expect((albums['items'] as List).single['name'], 'Mixed album');
+    },
+    skip: Platform.isWindows,
+  ); // Windows short-path case runs in compiled smoke.
+
   test('timeline cursors have no duplicates and sanitize private paths and attributes', () async {
     final first = await index.page('item', {'limit': '2'}, identity);
     final second = await index.page('item', {
