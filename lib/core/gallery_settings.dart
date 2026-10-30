@@ -11,6 +11,11 @@ final class GallerySettings {
     this.cameraBackup = false,
     this.mobileVideoQuality = 720,
     this.checkForUpdates = true,
+    this.language = 'system',
+    this.backgroundBackup = false,
+    this.backgroundTransfers = false,
+    this.backupOnlyWhileCharging = true,
+    this.backupIntervalMinutes = 60,
   });
 
   final GalleryAppearance appearance;
@@ -32,6 +37,9 @@ final class GallerySettings {
 
   /// Release builds ask GitHub for a newer build when the app starts.
   final bool checkForUpdates;
+  final String language;
+  final bool backgroundBackup, backgroundTransfers, backupOnlyWhileCharging;
+  final int backupIntervalMinutes;
 
   GallerySettings copyWith({
     GalleryAppearance? appearance,
@@ -42,6 +50,11 @@ final class GallerySettings {
     bool? cameraBackup,
     int? mobileVideoQuality,
     bool? checkForUpdates,
+    String? language,
+    bool? backgroundBackup,
+    bool? backgroundTransfers,
+    bool? backupOnlyWhileCharging,
+    int? backupIntervalMinutes,
   }) => GallerySettings(
     appearance: appearance ?? this.appearance,
     autoRefresh: autoRefresh ?? this.autoRefresh,
@@ -52,6 +65,12 @@ final class GallerySettings {
     cameraBackup: cameraBackup ?? this.cameraBackup,
     mobileVideoQuality: mobileVideoQuality ?? this.mobileVideoQuality,
     checkForUpdates: checkForUpdates ?? this.checkForUpdates,
+    language: language ?? this.language,
+    backgroundBackup: backgroundBackup ?? this.backgroundBackup,
+    backgroundTransfers: backgroundTransfers ?? this.backgroundTransfers,
+    backupOnlyWhileCharging:
+        backupOnlyWhileCharging ?? this.backupOnlyWhileCharging,
+    backupIntervalMinutes: backupIntervalMinutes ?? this.backupIntervalMinutes,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -63,6 +82,11 @@ final class GallerySettings {
     'cameraBackup': cameraBackup,
     'mobileVideoQuality': mobileVideoQuality,
     'checkForUpdates': checkForUpdates,
+    'language': language,
+    'backgroundBackup': backgroundBackup,
+    'backgroundTransfers': backgroundTransfers,
+    'backupOnlyWhileCharging': backupOnlyWhileCharging,
+    'backupIntervalMinutes': backupIntervalMinutes,
   };
 
   factory GallerySettings.fromJson(Map<String, Object?> json) =>
@@ -82,5 +106,16 @@ final class GallerySettings {
           _ => 720,
         },
         checkForUpdates: json['checkForUpdates'] as bool? ?? true,
+        language: const ['system', 'en', 'hi'].contains(json['language'])
+            ? json['language'] as String
+            : 'system',
+        backgroundBackup: json['backgroundBackup'] as bool? ?? false,
+        backgroundTransfers: json['backgroundTransfers'] as bool? ?? false,
+        backupOnlyWhileCharging:
+            json['backupOnlyWhileCharging'] as bool? ?? true,
+        backupIntervalMinutes:
+            const [15, 60, 360].contains(json['backupIntervalMinutes'])
+            ? json['backupIntervalMinutes'] as int
+            : 60,
       );
 }

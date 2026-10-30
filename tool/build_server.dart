@@ -1,11 +1,12 @@
 // Builds the Windows PC server executables:
 //
-//   windows/server/build/nex_gallery_server.exe  console CLI for developers
-//   windows/server/build/nexgallery_server.exe   background agent (no console)
+//   windows/server/build/bundle/bin/nex_gallery_server.exe  console CLI
+//   windows/server/build/bundle/bin/nexgallery_server.exe   background agent
+//   windows/server/build/bundle/lib/                       native assets
 //
 // The agent is the same program with its PE subsystem set to Windows GUI, so
 // starting it at sign-in does not open a console window. The Windows app
-// build copies it next to nex_gallery.exe.
+// build preserves bin/lib below the installed app's server directory.
 //
 //   dart run tool/build_server.dart
 
@@ -15,13 +16,14 @@ import 'dart:typed_data';
 Future<void> main() async {
   final output = Directory('windows/server/build');
   await output.create(recursive: true);
-  final cli = File('${output.path}/nex_gallery_server.exe');
+  final cli = File('${output.path}/bundle/bin/nex_gallery_server.exe');
   final result = await Process.run(Platform.resolvedExecutable, [
-    'compile',
-    'exe',
+    'build',
+    'cli',
+    '--target',
     'windows/server/bin/nex_gallery_server.dart',
-    '-o',
-    cli.path,
+    '--output',
+    output.path,
   ]);
   stdout.write(result.stdout);
   stderr.write(result.stderr);
@@ -29,7 +31,7 @@ Future<void> main() async {
     exitCode = result.exitCode;
     return;
   }
-  final agent = File('${output.path}/nexgallery_server.exe');
+  final agent = File('${output.path}/bundle/bin/nexgallery_server.exe');
   final bytes = await cli.readAsBytes();
   setWindowsGuiSubsystem(bytes);
   await agent.writeAsBytes(bytes, flush: true);

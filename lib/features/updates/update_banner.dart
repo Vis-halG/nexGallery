@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../services/updates/app_update.dart';
@@ -41,12 +43,12 @@ class UpdateBanner extends StatelessWidget {
           UpdateStatus.failed => (
             'Update failed: ${updater.error ?? 'try again'}',
             'Retry',
-            updater.download,
+            updater.updateNow,
           ),
           _ => (
             'nexGallery ${release.label} is available.',
             'Update',
-            updater.download,
+            updater.updateNow,
           ),
         };
         return SafeArea(
@@ -74,7 +76,7 @@ class UpdateBanner extends StatelessWidget {
                       ),
                       if (release.notes.isNotEmpty)
                         IconButton(
-                          tooltip: 'What\'s new',
+                          tooltip: context.tr('What\'s new'),
                           icon: const Icon(Icons.notes_rounded),
                           color: scheme.onPrimaryContainer,
                           onPressed: () => showDialog<void>(
@@ -87,7 +89,7 @@ class UpdateBanner extends StatelessWidget {
                               actions: [
                                 TextButton(
                                   onPressed: () => Navigator.pop(context),
-                                  child: const Text('Close'),
+                                  child: const AppText('Close'),
                                 ),
                               ],
                             ),
@@ -97,7 +99,7 @@ class UpdateBanner extends StatelessWidget {
                           updater.status != UpdateStatus.installing)
                         TextButton(
                           onPressed: updater.dismiss,
-                          child: const Text('Later'),
+                          child: const AppText('Later'),
                         ),
                       if (action != null)
                         FilledButton(
@@ -109,7 +111,7 @@ class UpdateBanner extends StatelessWidget {
                               showMessage(context, updater.error!);
                             }
                           },
-                          child: Text(action),
+                          child: AppText(action),
                         ),
                     ],
                   ),

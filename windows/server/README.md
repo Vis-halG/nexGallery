@@ -59,9 +59,11 @@ DPAPI-protected owner secret in `X-Nex-Owner`.
 dart run tool/build_server.dart
 ```
 
-writes `windows/server/build/nex_gallery_server.exe` (console) and
-`windows/server/build/nexgallery_server.exe` (agent). The Windows app build
-copies the agent next to `nex_gallery.exe`.
+writes `windows/server/build/bundle/bin/nex_gallery_server.exe` (console),
+`windows/server/build/bundle/bin/nexgallery_server.exe` (agent) and the matching
+native libraries under `bundle/lib/`. `dart build cli` is required to include
+SQLite code assets. The Windows installer preserves the bundle below `server/`.
+Do not distribute the agent executable without its sibling native-library bundle.
 
 ## Developer console
 
@@ -94,6 +96,9 @@ Phone endpoints (bearer token plus signature):
 
 | Method and path | Scope | Purpose |
 | --- | --- | --- |
+| `GET /v1/catalog/timeline` | browse | Cursor-paged shared photos/videos; optional `root`, `album`, `person`, `q`, `limit` (1-200) |
+| `GET /v1/catalog/albums`, `GET /v1/catalog/people` | browse | Authorized album/People counts and covers; no private paths, unshared members or face embeddings |
+| `GET /v1/catalog/changes?since=TOKEN` | browse | Paged additions, updates and tombstones; device/permission-bound token |
 | `GET /v1/health` | none | Health, TLS and write mode |
 | `GET /v1/info` | browse | PC name, this phone's scopes and folders, Wake-on-LAN addresses, video-proxy support |
 | `GET /v1/roots` | browse | Folders this phone may open, without PC paths |

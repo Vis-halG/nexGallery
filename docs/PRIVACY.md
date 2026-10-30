@@ -37,6 +37,14 @@ shown in the app.
   object labels, places, thumbnails and video copies are stored in the app's
   private folder on that device.
 - Locked Folder files are encrypted with your password (AES-256-GCM).
+- Optional catalogue encryption protects albums and metadata with an
+  OS-protected AES-256-GCM key. Original media and derived analysis/thumbnail
+  caches retain their existing app-private storage boundary.
+- Remote offline copies, including partial downloads, are encrypted with an
+  OS-protected key. Opening, sharing or exporting decrypts a temporary private
+  copy. Old views are pruned on startup; clearing offline copies removes them.
+  Files explicitly exported or shared outside the app are no longer protected
+  by its cache encryption.
 - On the PC, the server's TLS key and owner secret are encrypted for your
   Windows account. Paired phones are stored as public keys and salted token
   hashes, with an activity log of what each phone did.
@@ -58,6 +66,7 @@ Originals are never deleted by these actions.
 | Set wallpaper | "Set as wallpaper" |
 | Install apps (GitHub release builds) | Installing a nexGallery update you downloaded, after its SHA-256 matches the release |
 | Wake lock (from the video player) | Keeping playback running while a video plays |
+| Foreground service, data sync, notifications | Opt-in scheduled camera backup and queued transfers; a stoppable work notification, network/charging rules and OS scheduling limits apply |
 
 ## Children
 

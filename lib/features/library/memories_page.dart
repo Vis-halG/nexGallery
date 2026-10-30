@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../core/media_item.dart';
@@ -40,7 +42,7 @@ class MemoriesPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Memories')),
+    appBar: AppBar(title: const AppText('Memories')),
     body: AnimatedBuilder(
       animation: model,
       builder: (context, _) {
@@ -49,7 +51,7 @@ class MemoriesPage extends StatelessWidget {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(32),
-              child: Text(
+              child: AppText(
                 'Memories appear when your library has photos from this week in earlier years, a busy last month, trips, named people or favorites. They are made on this device.',
                 textAlign: TextAlign.center,
               ),
@@ -171,7 +173,7 @@ class MemoryDetailPage extends StatelessWidget {
       title: Text(memory.title),
       actions: [
         IconButton(
-          tooltip: 'Play slideshow',
+          tooltip: context.tr('Play slideshow'),
           onPressed: () => _open(
             context,
             memory.items.where(model.canAccessMedia).toList(),

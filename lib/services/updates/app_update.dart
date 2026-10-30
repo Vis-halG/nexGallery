@@ -11,7 +11,7 @@ import '../remote/sha256.dart';
 const appBuild = int.fromEnvironment('NEXGALLERY_BUILD');
 const appVersion = String.fromEnvironment(
   'NEXGALLERY_VERSION',
-  defaultValue: '0.1.0',
+  defaultValue: '0.2.0',
 );
 
 /// Only builds published by the release workflow update themselves; Play
@@ -186,6 +186,7 @@ final class AppUpdater extends ChangeNotifier {
   double _progress = 0;
   String? _error;
   bool _dismissed = false;
+  Future<void>? _updating;
 
   UpdateStatus get status => _status;
   UpdateRelease? get release => _release;
@@ -247,7 +248,7 @@ final class AppUpdater extends ChangeNotifier {
   }
 
   /// Returns true when a newer build for this device is available.
-  Future<bool> check() async {
+  Future<bool> check({bool userInitiated = false}) async {
     if (_status == UpdateStatus.checking ||
         _status == UpdateStatus.downloading ||
         _status == UpdateStatus.installing) {
@@ -268,7 +269,7 @@ final class AppUpdater extends ChangeNotifier {
       final changed = _release?.build != release.build;
       _release = release;
       _asset = asset;
-      if (changed) _dismissed = false;
+      if (changed || userInitiated) _dismissed = false;
       final cached = File('${downloads.path}/${asset.fileName}');
       if (await cached.exists() &&
           await cached.length() == asset.size &&
@@ -352,6 +353,16 @@ final class AppUpdater extends ChangeNotifier {
     if (file == null || _status != UpdateStatus.ready) return;
     _set(UpdateStatus.installing);
     try {
+      final asset = _asset!;
+      if (!await file.exists() ||
+          await file.length() != asset.size ||
+          await Sha256.fileHex(file) != asset.sha256) {
+        _file = null;
+        if (await file.exists()) await file.delete();
+        throw const FormatException(
+          'The installer changed after download. Download the update again.',
+        );
+      }
       await installer(file);
       // Android returns after showing its installer; the app restarts when
       // the update is installed.
@@ -359,6 +370,19 @@ final class AppUpdater extends ChangeNotifier {
     } on Object catch (error) {
       _set(UpdateStatus.failed, error: _message(error));
     }
+  }
+
+  /// A single user action downloads, verifies and opens the platform installer.
+  Future<void> updateNow() {
+    if (_updating case final running?) return running;
+    final operation = _updateNow();
+    _updating = operation;
+    return operation.whenComplete(() => _updating = null);
+  }
+
+  Future<void> _updateNow() async {
+    if (_status != UpdateStatus.ready) await download();
+    if (_status == UpdateStatus.ready) await install();
   }
 
   /// Deletes downloads of builds that are already installed.

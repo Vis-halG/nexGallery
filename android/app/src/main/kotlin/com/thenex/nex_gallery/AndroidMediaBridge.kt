@@ -8,6 +8,7 @@ import android.content.ClipData
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Intent
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -59,11 +60,13 @@ import kotlin.math.roundToInt
  * app's private files and cache directories.
  */
 class AndroidMediaBridge(
-    private val activity: Activity,
+    private val context: Context,
     messenger: BinaryMessenger,
+    private val activityProvider: () -> Activity? = { null },
 ) : MethodChannel.MethodCallHandler {
+    private val activity: Activity get() = requireNotNull(activityProvider()) { "This action needs an open nexGallery window" }
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
-    private val resolver = activity.contentResolver
+    private val resolver = context.contentResolver
     private val mainHandler = Handler(Looper.getMainLooper())
     private val worker = Executors.newFixedThreadPool(2)
     private var permissionResult: MethodChannel.Result? = null
@@ -74,7 +77,7 @@ class AndroidMediaBridge(
     private var consentDeletedCount = 0
     private var directoryPickerResult: MethodChannel.Result? = null
     private var documentPickerResult: MethodChannel.Result? = null
-    private val videoEditor = VideoEditor(activity)
+    private val videoEditor = VideoEditor(context)
     private val secretLock = Any()
     private val cacheFileLock = Any()
 
@@ -95,7 +98,7 @@ class AndroidMediaBridge(
                 "openMedia" -> openMedia(call, result)
                 "shareMedia" -> shareMedia(call, result)
                 "getStorageStats" -> runAsync(result) { storageStats() }
-                "getAppDataPath" -> result.success(activity.filesDir.absolutePath)
+                "getAppDataPath" -> result.success(context.filesDir.absolutePath)
                 "pickDirectory" -> pickDirectory(result)
                 "pickDocument" -> pickDocument(result)
                 "copyDocumentToAppCache" -> runAsync(result) { copyDocumentToAppCache(call) }
@@ -579,7 +582,7 @@ class AndroidMediaBridge(
             mime.startsWith("video/") || mime.startsWith("audio/") -> {
                 val retriever = MediaMetadataRetriever()
                 try {
-                    retriever.setDataSource(activity, uri)
+                    retriever.setDataSource(context, uri)
                     if (mime.startsWith("audio/")) {
                         val art = retriever.embeddedPicture
                             ?: throw BridgeException("thumbnail_unavailable", "Audio file has no embedded artwork")
@@ -910,7 +913,7 @@ class AndroidMediaBridge(
         val uri = validatedUri(call.argument<String>("uri"))
         val metadata = documentMetadata(uri)
         val safeName = sanitizedFileName(metadata.name ?: "document")
-        val directory = File(activity.cacheDir, IMPORT_CACHE_DIRECTORY)
+        val directory = File(context.cacheDir, IMPORT_CACHE_DIRECTORY)
         if (!directory.exists() && !directory.mkdirs()) {
             throw BridgeException("cache_unavailable", "Android could not create the transfer cache")
         }
@@ -980,7 +983,7 @@ class AndroidMediaBridge(
         val file = validatedAppFile(call.argument<String>("path"))
         val uri = FileProvider.getUriForFile(
             activity,
-            "${activity.packageName}.fileprovider",
+            "${context.packageName}.fileprovider",
             file,
         )
         val requestedMime = call.argument<String>("mimeType")
@@ -999,7 +1002,7 @@ class AndroidMediaBridge(
             throw BridgeException("invalid_path", "An app-private file path is required")
         }
         val file = File(value).canonicalFile
-        val roots = listOf(activity.filesDir.canonicalFile, activity.cacheDir.canonicalFile)
+        val roots = listOf(context.filesDir.canonicalFile, context.cacheDir.canonicalFile)
         val insideAppStorage = roots.any { root ->
             file.path.startsWith(root.path + File.separator)
         }
@@ -1351,7 +1354,7 @@ class AndroidMediaBridge(
     }
 
     private fun secretPreferences() =
-        activity.getSharedPreferences(SECRET_PREFERENCES, Activity.MODE_PRIVATE)
+        context.getSharedPreferences(SECRET_PREFERENCES, Activity.MODE_PRIVATE)
 
     private fun validatedSecretKey(value: String?): String {
         val key = value.orEmpty()
@@ -1378,7 +1381,7 @@ class AndroidMediaBridge(
     private fun openAppSettings(result: MethodChannel.Result) {
         val intent = Intent(
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-            Uri.fromParts("package", activity.packageName, null),
+            Uri.fromParts("package", context.packageName, null),
         )
         launchIntent(intent, result)
     }
@@ -1441,7 +1444,7 @@ class AndroidMediaBridge(
     }
 
     private fun isGranted(permission: String): Boolean =
-        activity.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
     private fun clearConsent() {
         consentResult = null

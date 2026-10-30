@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -184,7 +186,7 @@ class _RemoteStreamPageState extends State<RemoteStreamPage> {
                     const SizedBox(height: 16),
                     TextButton(
                       onPressed: _playOriginal,
-                      child: const Text('Play the original instead'),
+                      child: const AppText('Play the original instead'),
                     ),
                   ],
                 ),

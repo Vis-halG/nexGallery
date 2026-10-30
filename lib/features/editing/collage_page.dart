@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -78,7 +80,7 @@ class _CollagePageState extends State<CollagePage> {
       await widget.tools.saveEditedCopy(widget.items.first, output);
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Collage saved.')));
+            .showSnackBar(const SnackBar(content: AppText('Collage saved.')));
         Navigator.pop(context);
       }
     } catch (error) {
@@ -91,11 +93,11 @@ class _CollagePageState extends State<CollagePage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Collage'),
+      title: const AppText('Collage'),
       actions: [
         TextButton(
           onPressed: _busy || _preview == null ? null : _save,
-          child: const Text('Save'),
+          child: const AppText('Save'),
         ),
       ],
     ),
@@ -114,7 +116,7 @@ class _CollagePageState extends State<CollagePage> {
             child: Image.memory(_preview!, gaplessPlayback: true),
           ),
         SwitchListTile.adaptive(
-          title: const Text('Dark background'),
+          title: const AppText('Dark background'),
           value: _dark,
           onChanged: _busy || _photos == null
               ? null

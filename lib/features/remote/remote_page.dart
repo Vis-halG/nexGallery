@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -144,13 +146,13 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
             80,
           ),
           children: [
-            Text(
+            AppText(
               'PC server',
               style: Theme.of(context).textTheme.headlineMedium
                   ?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.6),
             ),
             const SizedBox(height: 4),
-            Text(
+            AppText(
               'Share only the folders you approve with phones you approve.',
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -187,7 +189,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                     Icon(Icons.security_rounded),
                     SizedBox(width: 12),
                     Expanded(
-                      child: Text(
+                      child: AppText(
                         'Connections use TLS with this PC\'s pinned certificate. Every phone signs its requests with its own key, and you approve each phone and what it may do. Never forward this port on your router; use Tailscale for access away from home.',
                       ),
                     ),
@@ -210,13 +212,13 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
+            AppText(
               'Allowed folders',
               style: Theme.of(context).textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
-            const Text(
+            const AppText(
               'Only these folders and their contents are visible to phones.',
             ),
             for (final folder in _folders)
@@ -229,7 +231,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 trailing: IconButton(
-                  tooltip: 'Stop sharing this folder',
+                  tooltip: context.tr('Stop sharing this folder'),
                   onPressed: running
                       ? null
                       : () => setState(() => _folders.remove(folder)),
@@ -242,8 +244,8 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                   child: TextField(
                     controller: _pathController,
                     enabled: !running,
-                    decoration: const InputDecoration(
-                      labelText: 'Folder path (optional)',
+                    decoration: InputDecoration(
+                      labelText: context.tr('Folder path (optional)'),
                       hintText: r'D:\Photos',
                     ),
                     onSubmitted: (_) => _addFolder(),
@@ -253,12 +255,12 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                 OutlinedButton.icon(
                   onPressed: running ? null : _addFolder,
                   icon: const Icon(Icons.create_new_folder_outlined),
-                  label: const Text('Add folder'),
+                  label: const AppText('Add folder'),
                 ),
               ],
             ),
             const SizedBox(height: 16),
-            Text(
+            AppText(
               'Who can connect',
               style: Theme.of(context).textTheme.titleSmall,
             ),
@@ -268,17 +270,17 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                 ButtonSegment(
                   value: ServerNetworkMode.thisPc,
                   icon: Icon(Icons.computer_outlined),
-                  label: Text('This PC'),
+                  label: AppText('This PC'),
                 ),
                 ButtonSegment(
                   value: ServerNetworkMode.lan,
                   icon: Icon(Icons.wifi_rounded),
-                  label: Text('Home network'),
+                  label: AppText('Home network'),
                 ),
                 ButtonSegment(
                   value: ServerNetworkMode.privateNetwork,
                   icon: Icon(Icons.vpn_lock_rounded),
-                  label: Text('Anywhere (Tailscale)'),
+                  label: AppText('Anywhere (Tailscale)'),
                 ),
               ],
               selected: {_mode},
@@ -300,8 +302,8 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
               onChanged: running
                   ? null
                   : (value) => setState(() => _allowWrites = value),
-              title: const Text('Allow changes from paired phones'),
-              subtitle: const Text(
+              title: const AppText('Allow changes from paired phones'),
+              subtitle: const AppText(
                 'Needed for uploads, camera backup, folders, rename and Trash. Each phone also needs your permission.',
               ),
             ),
@@ -311,7 +313,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
               onChanged: _controller.runsInBackground
                   ? null
                   : (value) => _controller.setAutoStart(value),
-              title: const Text('Start the server when nexGallery opens'),
+              title: const AppText('Start the server when nexGallery opens'),
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -329,7 +331,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                       }
                       await _controller.setRunInBackground(value);
                     },
-              title: const Text('Keep running when nexGallery is closed'),
+              title: const AppText('Keep running when nexGallery is closed'),
               subtitle: Text(
                 _controller.agentAvailable
                     ? 'Starts when you sign in to Windows and runs with your account\'s permissions only.'
@@ -342,8 +344,8 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
               onChanged: starting
                   ? null
                   : (value) => _controller.setKeepAwake(value),
-              title: const Text('Keep this PC available'),
-              subtitle: const Text(
+              title: const AppText('Keep this PC available'),
+              subtitle: const AppText(
                 'Windows does not sleep while the server runs. The screen can still turn off. Streams and transfers always keep the PC awake until they finish.',
               ),
             ),
@@ -352,7 +354,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
               OutlinedButton.icon(
                 onPressed: _controller.stop,
                 icon: const Icon(Icons.stop_circle_outlined),
-                label: const Text('Stop server'),
+                label: const AppText('Stop server'),
               )
             else
               FilledButton.icon(
@@ -369,7 +371,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.play_arrow_rounded),
-                label: const Text('Start server'),
+                label: const AppText('Start server'),
               ),
           ],
         ),
@@ -406,7 +408,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                   TextButton.icon(
                     onPressed: () => _showActivity(context),
                     icon: const Icon(Icons.history_rounded),
-                    label: const Text('Activity'),
+                    label: const AppText('Activity'),
                   ),
                 if (running)
                   Container(
@@ -418,7 +420,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                       color: Colors.green.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(999),
                     ),
-                    child: const Text('ONLINE'),
+                    child: const AppText('ONLINE'),
                   ),
               ],
             ),
@@ -438,7 +440,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                       children: [
                         QrView(data: link),
                         const SizedBox(height: 8),
-                        const Text('Scan in nexGallery on your phone'),
+                        const AppText('Scan in nexGallery on your phone'),
                       ],
                     ),
                   ConstrainedBox(
@@ -473,7 +475,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('One-time pairing code'),
+                      const AppText('One-time pairing code'),
                       SelectableText(
                         code.code,
                         style: Theme.of(context).textTheme.headlineMedium
@@ -487,7 +489,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                   ),
                 ),
                 IconButton.filledTonal(
-                  tooltip: 'Generate a new code',
+                  tooltip: context.tr('Generate a new code'),
                   onPressed: _controller.createPairingCode,
                   icon: const Icon(Icons.refresh_rounded),
                 ),
@@ -497,10 +499,10 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
         if (_controller.fingerprint != null)
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('PC certificate fingerprint'),
+            title: const AppText('PC certificate fingerprint'),
             subtitle: SelectableText(_controller.fingerprint!),
             trailing: IconButton(
-              tooltip: 'Copy fingerprint',
+              tooltip: context.tr('Copy fingerprint'),
               icon: const Icon(Icons.copy),
               onPressed: () => Clipboard.setData(
                 ClipboardData(text: _controller.fingerprint!),
@@ -513,7 +515,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
             leading: const Icon(Icons.link_rounded),
             title: SelectableText(url),
             trailing: IconButton(
-              tooltip: 'Copy address',
+              tooltip: context.tr('Copy address'),
               onPressed: () => Clipboard.setData(ClipboardData(text: url)),
               icon: const Icon(Icons.copy_rounded),
             ),
@@ -531,7 +533,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
+            AppText(
               'Waiting for your approval',
               style: Theme.of(context).textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.w800),
@@ -550,11 +552,11 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                   children: [
                     TextButton(
                       onPressed: () => _controller.deny(request.requestId),
-                      child: const Text('Decline'),
+                      child: const AppText('Decline'),
                     ),
                     FilledButton(
                       onPressed: () => _approve(request),
-                      child: const Text('Review'),
+                      child: const AppText('Review'),
                     ),
                   ],
                 ),
@@ -597,13 +599,13 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
+            AppText(
               'Uploads held for a security check',
               style: Theme.of(context).textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 4),
-            Text(
+            AppText(
               'Programs, scripts, archives and macro documents from phones stay out of your folders until they are scanned.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -646,11 +648,11 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                           if (item.status == QuarantineStatus.held)
                             const PopupMenuItem(
                               value: 'release',
-                              child: Text('Release to folder'),
+                              child: AppText('Release to folder'),
                             ),
                           const PopupMenuItem(
                             value: 'delete',
-                            child: Text('Delete'),
+                            child: AppText('Delete'),
                           ),
                         ],
                       ),
@@ -700,7 +702,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
+            AppText(
               'Paired phones',
               style: Theme.of(context).textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.w800),
@@ -730,9 +732,12 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
                   itemBuilder: (_) => const [
                     PopupMenuItem(
                       value: 'permissions',
-                      child: Text('Change permissions'),
+                      child: AppText('Change permissions'),
                     ),
-                    PopupMenuItem(value: 'remove', child: Text('Remove phone')),
+                    PopupMenuItem(
+                      value: 'remove',
+                      child: AppText('Remove phone'),
+                    ),
                   ],
                 ),
               ),
@@ -792,12 +797,12 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Server activity'),
+        title: const AppText('Server activity'),
         content: SizedBox(
           width: 560,
           height: 480,
           child: entries.isEmpty
-              ? const Center(child: Text('No activity yet.'))
+              ? const Center(child: AppText('No activity yet.'))
               : ListView.builder(
                   itemCount: entries.length,
                   itemBuilder: (context, index) {
@@ -828,7 +833,7 @@ class _DesktopServerPageState extends State<DesktopServerPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            child: const AppText('Close'),
           ),
         ],
       ),
@@ -891,7 +896,7 @@ class _PermissionsDialogState extends State<_PermissionsDialog> {
               ),
             ),
           const Divider(),
-          const Text('Folders this phone may open'),
+          const AppText('Folders this phone may open'),
           for (final root in widget.roots.entries)
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
@@ -913,7 +918,7 @@ class _PermissionsDialogState extends State<_PermissionsDialog> {
     actions: [
       TextButton(
         onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
+        child: const AppText('Cancel'),
       ),
       FilledButton(
         onPressed: _scopes.isEmpty || _roots.isEmpty
@@ -982,14 +987,14 @@ class _TailscaleCardState extends State<_TailscaleCard> {
             Row(
               children: [
                 Expanded(
-                  child: Text(
+                  child: AppText(
                     'Private network setup',
                     style: Theme.of(context).textTheme.titleMedium
                         ?.copyWith(fontWeight: FontWeight.w800),
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Check Tailscale again',
+                  tooltip: context.tr('Check Tailscale again'),
                   onPressed: _checking ? null : _check,
                   icon: const Icon(Icons.refresh_rounded),
                 ),

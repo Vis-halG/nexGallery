@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -299,12 +301,12 @@ class _LocalVideoPlayerState extends State<LocalVideoPlayer>
                           unawaited(_initialize());
                         },
                         icon: const Icon(Icons.refresh_rounded),
-                        label: const Text('Retry video'),
+                        label: const AppText('Retry video'),
                       ),
                       OutlinedButton.icon(
                         onPressed: widget.openExternal,
                         icon: const Icon(Icons.open_in_new_rounded),
-                        label: const Text('Open in device player'),
+                        label: const AppText('Open in device player'),
                       ),
                     ],
                   ),
@@ -328,7 +330,10 @@ class _LocalVideoPlayerState extends State<LocalVideoPlayer>
                   semanticsLabel: 'Loading local video',
                 ),
                 SizedBox(height: 12),
-                Text('Opening video…', style: TextStyle(color: Colors.white)),
+                AppText(
+                  'Opening video…',
+                  style: TextStyle(color: Colors.white),
+                ),
               ],
             ),
           ),
@@ -435,7 +440,7 @@ class _LocalVideoPlayerState extends State<LocalVideoPlayer>
                   ),
                 ),
               PopupMenuButton<double>(
-                tooltip: 'Playback speed',
+                tooltip: context.tr('Playback speed'),
                 enabled: !_commandPending,
                 initialValue: value.playbackSpeed,
                 onSelected: (speed) => _command(

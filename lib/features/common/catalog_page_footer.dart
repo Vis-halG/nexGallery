@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../src/gallery_model.dart';
@@ -20,7 +22,7 @@ class CatalogPageFooter extends StatelessWidget {
             OutlinedButton.icon(
               onPressed: model.loadMoreItems,
               icon: const Icon(Icons.expand_more_rounded),
-              label: const Text('Load more'),
+              label: const AppText('Load more'),
             ),
           ],
         ],

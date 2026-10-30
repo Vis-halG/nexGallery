@@ -11,6 +11,8 @@ import 'sha256.dart';
 import 'thumbnails.dart';
 import 'upload_quarantine.dart';
 import 'video_proxy.dart';
+import 'catalog_index.dart';
+import 'catalog_source.dart';
 
 void _stderrLog(String message) => stderr.writeln(message);
 
@@ -39,6 +41,7 @@ final class RemoteServerConfig {
     this.powerRequest,
     this.uploadScanner,
     this.videoTranscoder,
+    this.catalogLoader,
     this.log = _stderrLog,
   });
 
@@ -94,6 +97,7 @@ final class RemoteServerConfig {
   /// Makes 360p-1080p copies of videos for slow connections. Null looks for
   /// FFmpeg on this PC; without it phones stream originals only.
   final VideoTranscoder? videoTranscoder;
+  final CatalogLoader? catalogLoader;
 
   List<InternetAddress> get addresses =>
       bindAddresses ??
@@ -163,6 +167,10 @@ final class PairingRequest {
 }
 
 const _routeScopes = <String, String>{
+  'GET /v1/catalog/timeline': DeviceScope.browse,
+  'GET /v1/catalog/albums': DeviceScope.browse,
+  'GET /v1/catalog/people': DeviceScope.browse,
+  'GET /v1/catalog/changes': DeviceScope.browse,
   'GET /v1/roots': DeviceScope.browse,
   'GET /v1/info': DeviceScope.browse,
   'GET /v1/list': DeviceScope.browse,
@@ -220,6 +228,14 @@ final class NexGalleryServer {
        );
 
   final RemoteServerConfig config;
+  late final _catalogue = RemoteCatalogIndex(
+    _pathGuard,
+    config.catalogLoader ??
+        RemoteCatalogSource(
+          config.dataDirectory.parent,
+          config.allowedRoots.values,
+        ).load,
+  );
   final PathGuard _pathGuard;
   final DeviceTokenStore _tokenStore;
   final AuditLog _auditLog;
@@ -660,6 +676,29 @@ final class NexGalleryServer {
       if (queryRoot != null) _checkRoot(identity, queryRoot);
 
       switch (route) {
+        case 'GET /v1/catalog/timeline':
+        case 'GET /v1/catalog/albums':
+        case 'GET /v1/catalog/people':
+          final collection = switch (request.uri.path.split('/').last) {
+            'albums' => 'album',
+            'people' => 'person',
+            _ => 'item',
+          };
+          await _json(
+            request.response,
+            200,
+            await _catalogue.page(
+              collection,
+              request.uri.queryParameters,
+              identity,
+            ),
+          );
+        case 'GET /v1/catalog/changes':
+          await _json(
+            request.response,
+            200,
+            await _catalogue.changes(request.uri.queryParameters, identity),
+          );
         case 'GET /v1/roots':
           await _json(request.response, 200, <String, Object?>{
             'roots': _pathGuard.roots.values
@@ -715,6 +754,11 @@ final class NexGalleryServer {
             'Endpoint was not found.',
           );
       }
+    } on CatalogApiException catch (error) {
+      await _jsonError(
+        request.response,
+        _ApiException(error.status, error.code, error.message),
+      );
     } on _ApiException catch (error) {
       await _safeAudit(
         action: route,
@@ -2367,6 +2411,7 @@ final class NexGalleryServer {
 
   Future<Map<String, dynamic>> _readJson(HttpRequest request) async {
     if (request.contentLength > config.maxJsonBytes) {
+      request.response.persistentConnection = false;
       throw const _ApiException(
         413,
         'body_too_large',
@@ -2377,6 +2422,7 @@ final class NexGalleryServer {
     await for (final chunk in request) {
       bytes.addAll(chunk);
       if (bytes.length > config.maxJsonBytes) {
+        request.response.persistentConnection = false;
         throw const _ApiException(
           413,
           'body_too_large',

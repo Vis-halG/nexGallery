@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -51,7 +53,7 @@ class _FilesPageState extends State<FilesPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text(
+                    AppText(
                       'Files',
                       style: Theme.of(context).textTheme.headlineMedium
                           ?.copyWith(
@@ -80,7 +82,7 @@ class _FilesPageState extends State<FilesPage> {
                           ),
                         ),
                         icon: const Icon(Icons.folder_open),
-                        label: const Text(
+                        label: const AppText(
                           'Browse folders · Copy, move and ZIP',
                         ),
                       ),
@@ -98,7 +100,7 @@ class _FilesPageState extends State<FilesPage> {
                     children: [
                       ActionChip(
                         avatar: const Icon(Icons.apps_rounded, size: 18),
-                        label: const Text('All'),
+                        label: const AppText('All'),
                         onPressed: () => widget.model.showKinds(<MediaKind>{}),
                       ),
                       for (final kind in MediaKind.values) ...[
@@ -126,7 +128,7 @@ class _FilesPageState extends State<FilesPage> {
                 child: Row(
                   children: [
                     Expanded(
-                      child: Text(
+                      child: AppText(
                         'Indexed items',
                         style: Theme.of(context).textTheme.titleLarge
                             ?.copyWith(fontWeight: FontWeight.w800),
@@ -183,15 +185,21 @@ class _FilesPageState extends State<FilesPage> {
                         trailing: PopupMenuButton<String>(
                           onSelected: (value) => _action(item, value),
                           itemBuilder: (context) => const [
-                            PopupMenuItem(value: 'open', child: Text('Open')),
-                            PopupMenuItem(value: 'share', child: Text('Share')),
+                            PopupMenuItem(
+                              value: 'open',
+                              child: AppText('Open'),
+                            ),
+                            PopupMenuItem(
+                              value: 'share',
+                              child: AppText('Share'),
+                            ),
                             PopupMenuItem(
                               value: 'favorite',
-                              child: Text('Favorite'),
+                              child: AppText('Favorite'),
                             ),
                             PopupMenuItem(
                               value: 'trash',
-                              child: Text('Move to Trash'),
+                              child: AppText('Move to Trash'),
                             ),
                           ],
                         ),
@@ -216,12 +224,12 @@ class _FilesPageState extends State<FilesPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            const AppText(
               'Your folders',
               style: TextStyle(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
-            const Text(
+            const AppText(
               'Choose the folders to show in your library. Changes are picked up automatically.',
             ),
             const SizedBox(height: 12),
@@ -264,7 +272,9 @@ class _FilesPageState extends State<FilesPage> {
                 leading: const Icon(Icons.folder_outlined),
                 title: Text(path, maxLines: 2, overflow: TextOverflow.ellipsis),
                 trailing: IconButton(
-                  tooltip: 'Remove from library; files stay in place',
+                  tooltip: context.tr(
+                    'Remove from library; files stay in place',
+                  ),
                   onPressed: _choosingFolder || widget.model.isIndexing
                       ? null
                       : () => _removeFolder(path),
@@ -278,15 +288,15 @@ class _FilesPageState extends State<FilesPage> {
               child: ExpansionTile(
                 key: const PageStorageKey('files-path-expansion'),
                 tilePadding: EdgeInsets.zero,
-                title: const Text('Enter a folder path'),
+                title: const AppText('Enter a folder path'),
                 childrenPadding: const EdgeInsets.only(bottom: 8),
                 children: [
                   TextField(
                     key: const PageStorageKey('files-folder-path-input'),
                     controller: _pathController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       hintText: r'C:\Users\you\Pictures',
-                      labelText: 'Folder path',
+                      labelText: context.tr('Folder path'),
                       border: OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _addFolder(),
@@ -299,7 +309,7 @@ class _FilesPageState extends State<FilesPage> {
                           ? null
                           : _addFolder,
                       icon: const Icon(Icons.add_rounded),
-                      label: const Text('Add path'),
+                      label: const AppText('Add path'),
                     ),
                   ),
                 ],
@@ -401,7 +411,7 @@ class _SortButton extends StatelessWidget {
       (CatalogSortField.modifiedAt, 'Date modified'),
     ];
     return PopupMenuButton<(CatalogSortField, CatalogSortDirection)>(
-      tooltip: 'Sort items',
+      tooltip: context.tr('Sort items'),
       icon: const Icon(Icons.sort_rounded),
       onSelected: (value) => organizer.setSort(value.$1, value.$2),
       itemBuilder: (_) => [
@@ -444,7 +454,7 @@ class _NoFilesCard extends StatelessWidget {
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
             const SizedBox(height: 12),
-            const Text('No indexed files match this view.'),
+            const AppText('No indexed files match this view.'),
           ],
         ),
       ),

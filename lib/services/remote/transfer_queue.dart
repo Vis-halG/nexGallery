@@ -111,7 +111,7 @@ final class TransferJob {
   };
 }
 
-enum _Stop { pause, cancel }
+enum _Stop { pause, cancel, handoff }
 
 /// Persistent, sequential phone-PC transfers. Jobs survive app restarts and
 /// resume from their last confirmed byte.
@@ -121,6 +121,8 @@ final class TransferQueue extends ChangeNotifier {
     this.networkGate,
     this.resolveSource,
     this.onFinished,
+    this.allowedJob,
+    this.download,
     this.retryDelay = const Duration(seconds: 30),
     this.chunkBytes = 4 * 1024 * 1024,
   });
@@ -136,12 +138,29 @@ final class TransferQueue extends ChangeNotifier {
 
   /// Called when a job is done or skipped.
   final void Function(TransferJob job)? onFinished;
+
+  /// Background sessions may process only the categories the owner enabled.
+  final bool Function(TransferJob job)? allowedJob;
+
+  bool canRun(TransferJob job) => allowedJob?.call(job) ?? true;
+
+  /// Optional encrypted destination used by offline copies. Ordinary exports
+  /// keep the existing file downloader.
+  final Future<void> Function(
+    NexGalleryRemoteClient client,
+    RemoteEntry entry,
+    File destination,
+    void Function(int, int?) progress,
+  )?
+  download;
   final Duration retryDelay;
   final int chunkBytes;
 
   final _jobs = <TransferJob>[];
   NexGalleryRemoteClient? _client;
   bool _processing = false;
+  bool _handoff = false, _closed = false, _writeBlocked = false;
+  Completer<void>? _idle;
   TransferJob? _current;
   _Stop? _stop;
   Timer? _retry;
@@ -157,13 +176,36 @@ final class TransferQueue extends ChangeNotifier {
       Directory(p.join(directory.path, job.id));
 
   Future<void> load() async {
+    try {
+      await _load();
+      _writeBlocked = false;
+    } catch (_) {
+      _writeBlocked = true;
+      rethrow;
+    }
+  }
+
+  Future<void> _load() async {
     await directory.create(recursive: true);
+    final previous = File('${_index.path}.previous');
+    if (!await _index.exists() && await previous.exists()) {
+      await previous.rename(_index.path);
+    }
     if (!await _index.exists()) return;
     if (await _index.length() > 8 << 20) {
       throw const FormatException('The transfer list is too large.');
     }
     final value = jsonDecode(await _index.readAsString());
-    if (value is! Map || value['version'] != 1) return;
+    if (value is Map &&
+        value['version'] is int &&
+        (value['version'] as int) > 1) {
+      throw UnsupportedError(
+        'Transfers were saved by a newer nexGallery build.',
+      );
+    }
+    if (value is! Map || value['version'] != 1) {
+      throw const FormatException('Invalid transfer journal.');
+    }
     _jobs
       ..clear()
       ..addAll([
@@ -183,6 +225,9 @@ final class TransferQueue extends ChangeNotifier {
   }
 
   Future<void> _write() async {
+    if (_writeBlocked) {
+      throw StateError('Transfer writes are blocked after a failed load.');
+    }
     await directory.create(recursive: true);
     final temporary = File('${_index.path}.tmp');
     await temporary.writeAsString(
@@ -192,8 +237,55 @@ final class TransferQueue extends ChangeNotifier {
       }),
       flush: true,
     );
-    if (await _index.exists()) await _index.delete();
-    await temporary.rename(_index.path);
+    final previous = File('${_index.path}.previous');
+    if (await previous.exists()) await previous.delete();
+    if (await _index.exists()) await _index.rename(previous.path);
+    try {
+      await temporary.rename(_index.path);
+    } catch (_) {
+      if (!await _index.exists() && await previous.exists()) {
+        await previous.rename(_index.path);
+      }
+      rethrow;
+    }
+  }
+
+  void beginHandoff() {
+    _handoff = true;
+    _client = null;
+    _retry?.cancel();
+    if (_current != null) _stop ??= _Stop.handoff;
+  }
+
+  Future<void> flush() async {
+    while (_processing) {
+      await _idle?.future;
+    }
+    await _saving;
+    _handoff = false;
+  }
+
+  Future<void> pruneFinished({int keep = 200}) async {
+    final done = _jobs.where((v) => v.isFinished).toList();
+    if (done.length <= keep) return;
+    final remove = done.take(done.length - keep).map((v) => v.id).toSet();
+    _jobs.removeWhere((v) => remove.contains(v.id));
+    await _save();
+    notifyListeners();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_closed) super.notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _closed = true;
+    _client = null;
+    _retry?.cancel();
+    _stop ??= _Stop.handoff;
+    super.dispose();
   }
 
   /// Connects (or disconnects with null) the PC used for transfers.
@@ -372,13 +464,14 @@ final class TransferQueue extends ChangeNotifier {
   }
 
   void _kick() {
-    if (_processing || _client == null) return;
+    if (_closed || _processing || _client == null) return;
     _retry?.cancel();
     unawaited(_process());
   }
 
   Future<void> _process() async {
     _processing = true;
+    _idle = Completer<void>();
     notifyListeners();
     try {
       while (true) {
@@ -386,7 +479,7 @@ final class TransferQueue extends ChangeNotifier {
         if (client == null) break;
         TransferJob? next;
         for (final job in _jobs) {
-          if (job.status == TransferStatus.queued) {
+          if (job.status == TransferStatus.queued && canRun(job)) {
             next = job;
             break;
           }
@@ -411,6 +504,7 @@ final class TransferQueue extends ChangeNotifier {
     } finally {
       _processing = false;
       _current = null;
+      _idle?.complete();
       notifyListeners();
     }
   }
@@ -462,16 +556,24 @@ final class TransferQueue extends ChangeNotifier {
             : 'The PC is checking this file for threats.';
       } else {
         final destination = File(job.localPath!);
-        if (!await destination.exists()) {
+        final entry = RemoteEntry(
+          root: job.root,
+          path: job.remotePath,
+          name: job.name,
+          type: 'file',
+          size: job.total,
+          modifiedAt: job.remoteModified,
+        );
+        if (download != null) {
+          await download!(
+            client,
+            entry,
+            destination,
+            (done, total) => _progress(job, done, total),
+          );
+        } else if (!await destination.exists()) {
           await client.download(
-            entry: RemoteEntry(
-              root: job.root,
-              path: job.remotePath,
-              name: job.name,
-              type: 'file',
-              size: job.total,
-              modifiedAt: job.remoteModified,
-            ),
+            entry: entry,
             destination: destination,
             onProgress: (done, total) => _progress(job, done, total),
           );
@@ -488,7 +590,9 @@ final class TransferQueue extends ChangeNotifier {
         await _remove(job);
         return false;
       }
-      job.status = TransferStatus.paused;
+      job.status = stop == _Stop.handoff
+          ? TransferStatus.queued
+          : TransferStatus.paused;
     } on RemoteApiException catch (error) {
       if (job.kind == TransferKind.upload &&
           error.code == 'destination_exists') {
@@ -512,7 +616,25 @@ final class TransferQueue extends ChangeNotifier {
       job
         ..status = TransferStatus.failed
         ..error = error.message;
+    } on FormatException catch (error) {
+      job
+        ..status = TransferStatus.failed
+        ..error = error.message;
+    } catch (_) {
+      job
+        ..status = TransferStatus.failed
+        ..error =
+            'Transfer could not be verified. Retry or select the file again.';
     } finally {
+      if (_handoff &&
+          _stop != _Stop.pause &&
+          _stop != _Stop.cancel &&
+          !job.isFinished &&
+          job.status != TransferStatus.conflict) {
+        job
+          ..status = TransferStatus.queued
+          ..error = null;
+      }
       if (temporary != null && await temporary.exists()) {
         await temporary.delete();
       }

@@ -1,6 +1,6 @@
 # nexGallery threat model
 
-Updated 18 October 2026 for the working tree. It covers the Android app, the
+Updated 29 October 2026 for the working tree. It covers the Android app, the
 Windows app and the PC server (in-process or the `nexgallery_server.exe`
 background agent). It records what the code does today; open items are listed
 at the end and in [implementation status](IMPLEMENTATION_STATUS.md).
@@ -71,13 +71,26 @@ at the end and in [implementation status](IMPLEMENTATION_STATUS.md).
 - **Windows firewall rules** are not changed by nexGallery (that would need
   administrator rights). Private-network mode limits exposure by binding only
   to loopback and Tailscale addresses.
-- **Catalogue encryption at rest** for high-security mode is not implemented;
-  derived data relies on OS account isolation and device encryption.
+- **Optional catalogue encryption** uses authenticated AES-256-GCM with an
+  Android Keystore/Windows DPAPI-protected key. Backups/staging are encrypted;
+  loss of the OS key fails closed. It does not encrypt original media,
+  thumbnails or separate analysis indexes. Those remain inside the OS
+  account/app-private boundary.
+- **Remote offline copies** independently use chunk-authenticated AES-256-GCM,
+  including incomplete downloads, with an OS-protected key. Explicit open/share/
+  export creates a temporary private plaintext copy; startup prunes views older
+  than 30 minutes, and clearing offline copies removes these views. Exported or
+  shared copies cannot be revoked or protected by the app after leaving it.
+- **Background transfer ownership** uses one native lease across Flutter engines,
+  durable journals and a cancellation/drain handoff. The worker reads preferences
+  and authorized MediaStore items without opening the UI catalogue for writes.
 - **Parsers.** Thumbnails and metadata decode untrusted images in Dart with
   size limits; native codecs on each platform remain part of the attack surface.
 
 ## Not yet done
 
-- External penetration test and fuzzing of the HTTP parser and path guard.
+- External penetration testing. Seeded HTTP body/path/permission fuzzing now
+  runs in the automated test suite, but is not an independent assessment.
 - Physical-device testing of Keystore, BiometricPrompt and OEM variations.
-- Code-signing of the Windows installer and Android release keys (owner-held).
+- Trusted code-signing of the Windows installer (owner-provided certificate).
+  A permanent Android release key is configured and stays outside Git.

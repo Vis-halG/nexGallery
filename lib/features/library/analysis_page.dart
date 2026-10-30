@@ -1,4 +1,8 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
+
+import 'places_map_page.dart';
 
 import 'package:flutter/material.dart';
 
@@ -255,7 +259,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
       final target = await showDialog<String>(
         context: context,
         builder: (context) => SimpleDialog(
-          title: const Text('Merge into person'),
+          title: const AppText('Merge into person'),
           children: [
             for (final other in others)
               SimpleDialogOption(
@@ -316,11 +320,23 @@ class _AnalysisPageState extends State<AnalysisPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: Text(_title),
+      title: AppText(_title),
       actions: [
+        if (widget.kind == AnalysisKind.places)
+          IconButton(
+            tooltip: context.tr('Photo map'),
+            icon: const Icon(Icons.map_outlined),
+            onPressed: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute(
+                builder: (_) =>
+                    PlacesMapPage(model: widget.model, tools: widget.tools),
+              ),
+            ),
+          ),
         if (widget.kind == AnalysisKind.people && _analysis != null)
           IconButton(
-            tooltip: 'Clear face groups',
+            tooltip: context.tr('Clear face groups'),
             onPressed: _busy
                 ? null
                 : () async {
@@ -338,7 +354,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
           ),
         if (widget.kind == AnalysisKind.search && _analysis != null)
           PopupMenuButton<String>(
-            tooltip: 'Search index options',
+            tooltip: context.tr('Search index options'),
             enabled: !_busy,
             onSelected: (value) => _run(() async {
               final analysis = _analysis!;
@@ -353,11 +369,11 @@ class _AnalysisPageState extends State<AnalysisPage> {
             itemBuilder: (_) => const [
               PopupMenuItem(
                 value: 'clear',
-                child: Text('Clear labels and text index'),
+                child: AppText('Clear labels and text index'),
               ),
               PopupMenuItem(
                 value: 'remove',
-                child: Text('Delete downloaded packs'),
+                child: AppText('Delete downloaded packs'),
               ),
             ],
           ),
@@ -433,7 +449,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
                           () => _status = 'Stopping after the current file…',
                         );
                       },
-                child: const Text('Stop scan'),
+                child: const AppText('Stop scan'),
               ),
             ],
             if (_error != null)
@@ -449,7 +465,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
                 groups.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(24),
-                child: Text('No groups yet. Run a scan to find photos.'),
+                child: AppText('No groups yet. Run a scan to find photos.'),
               ),
             for (final entry in sortedGroups)
               Card(
@@ -487,11 +503,11 @@ class _AnalysisPageState extends State<AnalysisPage> {
                           itemBuilder: (_) => const [
                             PopupMenuItem(
                               value: 'rename',
-                              child: Text('Name person'),
+                              child: AppText('Name person'),
                             ),
                             PopupMenuItem(
                               value: 'merge',
-                              child: Text('Merge group'),
+                              child: AppText('Merge group'),
                             ),
                           ],
                         ),
@@ -499,7 +515,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
               ),
             if (widget.kind == AnalysisKind.cleanup) ...[
               const SizedBox(height: 16),
-              Text(
+              AppText(
                 'Exact duplicates',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
@@ -518,20 +534,20 @@ class _AnalysisPageState extends State<AnalysisPage> {
                     ),
                   ),
               if (!_busy && _duplicates.isEmpty)
-                const Text('No duplicate results. Run a scan to check.'),
+                const AppText('No duplicate results. Run a scan to check.'),
               const SizedBox(height: 24),
-              Text(
+              AppText(
                 'Similar photos',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
-              const Text(
+              const AppText(
                 'Bursts and look-alike shots. The suggested best shot is kept.',
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: analysis == null || _busy ? null : _scanSimilar,
                 icon: const Icon(Icons.burst_mode_outlined),
-                label: const Text('Find similar photos'),
+                label: const AppText('Find similar photos'),
               ),
               for (final group in _similar)
                 if (group.where((v) => byId.containsKey(v.id)).length > 1)
@@ -547,7 +563,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
                     onKeepBest: _busy ? null : _keepBest,
                   ),
               const SizedBox(height: 24),
-              Text(
+              AppText(
                 'Large files (100 MB or more)',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
@@ -559,7 +575,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
                       _showItems('Review large file', [item], cleanup: true),
                 ),
               if (large.isEmpty)
-                const Text('No large files in the accessible gallery.'),
+                const AppText('No large files in the accessible gallery.'),
             ],
           ],
         );
@@ -585,7 +601,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
       Card(
         child: ListTile(
           leading: const Icon(Icons.category_outlined),
-          title: const Text('Objects and scenes'),
+          title: const AppText('Objects and scenes'),
           subtitle: Text(
             _labelsInstalled
                 ? 'Pack installed · ${counts.isEmpty ? 'not scanned yet' : '${counts.length} kinds found'}'
@@ -600,7 +616,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
       Card(
         child: ListTile(
           leading: const Icon(Icons.text_fields_rounded),
-          title: const Text('Text in photos'),
+          title: const AppText('Text in photos'),
           subtitle: Text(
             _textInstalled
                 ? 'Pack installed · $withText photos with text'
@@ -614,7 +630,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
       ),
       if (top.isNotEmpty) ...[
         const SizedBox(height: 16),
-        Text(
+        AppText(
           'Found in your photos',
           style: Theme.of(context).textTheme.titleMedium,
         ),
@@ -634,7 +650,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
         ),
       ],
       const SizedBox(height: 16),
-      const Text(
+      const AppText(
         'Labels and text can be wrong. They are used only for search on this device and can be cleared from the menu.',
       ),
     ];
@@ -685,11 +701,11 @@ class _SimilarGroupTile extends StatelessWidget {
               Expanded(child: Text('${group.length} similar photos')),
               TextButton(
                 onPressed: () => onOpen(group),
-                child: const Text('Review'),
+                child: const AppText('Review'),
               ),
               TextButton(
                 onPressed: onKeepBest == null ? null : () => onKeepBest!(group),
-                child: const Text('Keep best'),
+                child: const AppText('Keep best'),
               ),
             ],
           ),

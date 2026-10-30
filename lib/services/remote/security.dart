@@ -15,9 +15,15 @@ abstract final class DeviceScope {
   static const all = <String>{browse, download, upload, organize, trash};
   static const readOnly = <String>{browse, download};
 
-  static Set<String> parse(Object? value) => value is List
-      ? value.whereType<String>().where(all.contains).toSet()
-      : <String>{...all};
+  static Set<String> parse(Object? value) {
+    // Null remains compatible with the original token-store schema. An
+    // explicitly malformed permissions value must never grant every scope.
+    if (value == null) return {...all};
+    if (value is! List || value.any((v) => v is! String || !all.contains(v))) {
+      throw const FormatException('Invalid device permission scopes.');
+    }
+    return value.cast<String>().toSet();
+  }
 }
 
 final class DeviceIdentity {

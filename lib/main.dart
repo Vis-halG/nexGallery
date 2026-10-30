@@ -7,6 +7,10 @@ import 'src/app.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(
+      ['Natural Earth'],
+      await rootBundle.loadString('docs/third-party/NATURAL_EARTH_NOTICE.txt'),
+    );
     yield LicenseEntryWithLineBreaks([
       'OpenCV YuNet',
     ], await rootBundle.loadString('docs/third-party/YUNET_LICENSE.txt'));

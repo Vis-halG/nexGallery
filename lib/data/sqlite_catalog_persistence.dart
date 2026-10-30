@@ -22,6 +22,26 @@ final class SqliteCatalogPersistence implements CloseableCatalogPersistence {
            '${File(filePath).parent.path}${Platform.pathSeparator}catalog.json';
 
   static const int currentSchemaVersion = 2;
+
+  /// A consistent read for the background agent; never migrates, recovers or
+  /// writes the desktop app's database while that app owns it.
+  static Future<CatalogSnapshot> readOnlySnapshot(String path) =>
+      Isolate.run(() {
+        final db = sqlite3.open(path, mode: OpenMode.readOnly);
+        try {
+          if (db.userVersion != currentSchemaVersion) {
+            throw const FormatException(
+              'Unsupported catalogue database version.',
+            );
+          }
+          db.execute('BEGIN');
+          final snapshot = _SqliteStore(path, '', 0)._read(db);
+          db.execute('COMMIT');
+          return snapshot;
+        } finally {
+          db.close();
+        }
+      });
   final String filePath;
   final String legacyJsonFilePath;
   final int maximumLegacyBytes;

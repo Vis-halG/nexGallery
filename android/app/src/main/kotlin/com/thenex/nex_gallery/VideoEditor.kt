@@ -1,6 +1,6 @@
 package com.thenex.nex_gallery
 
-import android.app.Activity
+import android.content.Context
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -19,7 +19,7 @@ import java.io.File
 
 /** One foreground export at a time; output is always an app-private new file. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-class VideoEditor(private val activity: Activity) {
+class VideoEditor(private val activity: Context) {
     private var transformer: Transformer? = null
     private var pending: MethodChannel.Result? = null
     private var output: File? = null

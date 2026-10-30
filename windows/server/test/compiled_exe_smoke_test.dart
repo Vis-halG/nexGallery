@@ -7,12 +7,15 @@ import 'package:nex_gallery/services/remote/network_modes.dart';
 import 'package:nex_gallery/services/remote/nex_gallery_client.dart';
 import 'package:nex_gallery/services/remote/owner_client.dart';
 import 'package:nex_gallery/services/remote/tls_identity.dart';
+import 'package:nex_gallery/core/catalog_models.dart';
+import 'package:nex_gallery/core/media_item.dart';
+import 'package:nex_gallery/data/sqlite_catalog_persistence.dart';
 
 /// Runs the executables built by `dart run tool/build_server.dart`.
 Future<void> main() async {
   final build =
       'windows${Platform.pathSeparator}server'
-      '${Platform.pathSeparator}build${Platform.pathSeparator}';
+      '${Platform.pathSeparator}build${Platform.pathSeparator}bundle${Platform.pathSeparator}bin${Platform.pathSeparator}';
   final cli = File('${build}nex_gallery_server.exe').absolute;
   final agent = File('${build}nexgallery_server.exe').absolute;
   for (final executable in [cli, agent]) {
@@ -106,6 +109,42 @@ Future<void> _agent(File executable) async {
   final workspace = await Directory.systemTemp.createTemp('nex_agent_test_');
   final root = await Directory('${workspace.path}/root').create();
   await File('${root.path}/hello.txt').writeAsString('hello from the agent');
+  final photo = await File('${root.path}/photo.jpg').writeAsBytes([1, 2, 3]);
+  final stat = await photo.stat();
+  final catalogue = SqliteCatalogPersistence(
+    '${workspace.path}/catalog.sqlite',
+  );
+  await catalogue.save(
+    CatalogSnapshot(
+      items: [
+        MediaItem(
+          id: 'photo',
+          name: 'photo.jpg',
+          uri: photo.uri.toString(),
+          relativePath: 'photo.jpg',
+          kind: MediaKind.image,
+          source: MediaSource.pc,
+          isFavorite: true,
+          indexedAt: DateTime.now(),
+          metadata: MediaMetadata(
+            sizeBytes: stat.size,
+            modifiedAt: stat.modified,
+          ),
+        ),
+      ],
+      albums: [
+        MediaAlbum(
+          id: 'family',
+          name: 'Family',
+          itemIds: ['photo'],
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      ],
+      savedAt: DateTime.now(),
+    ),
+  );
+  await catalogue.close();
   final state = await Directory('${workspace.path}/state').create();
   final identity = await TlsIdentity.loadOrCreate(state);
   final port = await _freePort();
@@ -166,8 +205,18 @@ Future<void> _agent(File executable) async {
     _expect(await phone.checkPairing(ticket), 'owner approval over the agent');
     final entries = await phone.list(root: 'shared_1', path: '');
     _expect(
-      entries.single.name == 'hello.txt',
+      entries.any((v) => v.name == 'hello.txt'),
       'paired phone browses the agent',
+    );
+    final timeline = await phone.catalog();
+    _expect(
+      timeline.items.single['favorite'] == true,
+      'compiled agent reads the desktop SQLite catalogue',
+    );
+    _expect(
+      (await phone.catalog(collection: 'albums')).items.single['name'] ==
+          'Family',
+      'compiled agent serves authorized albums over pinned TLS',
     );
     _expect((await owner.devices()).length == 1, 'agent lists paired phones');
     phone.close();
@@ -181,7 +230,19 @@ Future<void> _agent(File executable) async {
     _expect(stopped, 'agent exits after the owner shutdown request');
     final log = await File('${state.path}/agent.log').readAsString();
     _expect(log.contains('Stopped by shutdown.'), 'agent writes agent.log');
+  } catch (error) {
+    try {
+      await owner.shutdown();
+    } catch (_) {}
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    final diagnostics = File('${state.path}/agent.log');
+    if (await diagnostics.exists())
+      stderr.write(await diagnostics.readAsString());
+    rethrow;
   } finally {
+    try {
+      if (await owner.isRunning()) await owner.shutdown();
+    } catch (_) {}
     owner.close();
     // The agent releases its files shortly after exiting.
     for (var attempt = 0; attempt < 20; attempt++) {

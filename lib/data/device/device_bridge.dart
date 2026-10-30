@@ -1,6 +1,10 @@
 import 'dart:io';
+import 'dart:ui' show PluginUtilities;
 
 import 'package:flutter/services.dart';
+
+import '../../core/gallery_settings.dart';
+import '../../services/remote/background_entry.dart';
 
 final class DeviceConditions {
   const DeviceConditions({
@@ -82,6 +86,52 @@ class DeviceBridge {
 
   final MethodChannel _channel;
   final bool _isAndroid;
+
+  Future<bool> claimTransferSession(String owner) async {
+    if (!_isAndroid) return true;
+    return await _channel.invokeMethod<bool>('claimTransferSession', {
+          'owner': owner,
+        }) ??
+        false;
+  }
+
+  Future<void> releaseTransferSession(String owner) async {
+    if (_isAndroid) {
+      await _channel.invokeMethod<void>('releaseTransferSession', {
+        'owner': owner,
+      });
+    }
+  }
+
+  Future<void> configureBackground(GallerySettings settings) async {
+    if (!_isAndroid) return;
+    await _channel.invokeMethod<void>('configureBackground', {
+      'callbackHandle': PluginUtilities.getCallbackHandle(
+        backgroundBackupEntry,
+      )!.toRawHandle(),
+      'periodic': settings.cameraBackup && settings.backgroundBackup,
+      'transfers': settings.backgroundTransfers,
+      'wifiOnly': settings.transfersOnWifiOnly,
+      'chargingOnly': settings.backupOnlyWhileCharging,
+      'minutes': settings.backupIntervalMinutes,
+    });
+  }
+
+  Future<void> runBackgroundNow() async {
+    if (_isAndroid) await _channel.invokeMethod<void>('runBackgroundNow');
+  }
+
+  Future<String> runBackgroundReadiness() async =>
+      (await _channel.invokeMethod<String>('runBackgroundReadiness', {
+        'callbackHandle': PluginUtilities.getCallbackHandle(
+          backgroundBackupEntry,
+        )!.toRawHandle(),
+      }))!;
+  Future<Map<Object?, Object?>> backgroundWorkStatus(String id) async =>
+      await _channel.invokeMapMethod<Object?, Object?>('backgroundWorkStatus', {
+        'id': id,
+      }) ??
+      const {};
 
   Future<DeviceConditions> conditions() async {
     if (!_isAndroid) return const DeviceConditions();

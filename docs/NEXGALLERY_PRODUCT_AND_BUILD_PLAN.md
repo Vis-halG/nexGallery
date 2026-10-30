@@ -1,22 +1,22 @@
 # nexGallery ? Complete Product and Build Plan
 
-Status on 9 October 2026: the Phase 1 feature implementation is in place. The
+Historical product target; status updated 29 October 2026. The
 Flutter app uses a versioned SQLite catalogue, Android MediaStore/SAF, Windows
 selected folders/watchers, paged media views, integrated local playback and
 settings. Native validation and production release readiness are separate from
 feature implementation. The full six-phase product scope below remains the target.
 See [implementation status](IMPLEMENTATION_STATUS.md),
 [the current stack](TECH_STACK.md), and
-[latest verification](verification-2026-10-18.md) for implemented boundaries.
+[latest verification](verification-2026-10-29.md) for implemented boundaries.
 
 | Area | Implemented foundation | Remaining product work |
 | --- | --- | --- |
-| Shared app | Adaptive navigation, settings, paged timeline, swipe/zoom viewer, integrated video and metadata | Large-library queries/performance, complete codecs/EXIF, localization and release accessibility |
-| Android | MediaStore/SAF bridge, partial/denied states, permission-lifecycle guards, thumbnails/open/share | Physical-device matrix, background transfers and signed release |
-| Windows | Selected-folder scanner/picker, watchers/reconciliation, unavailable-folder preservation, SQLite and server core | Stable file identity integration, background agent, native build verification, installer/signing |
-| Organization | Virtual albums/favorites/archive; existing physical Trash code | Verified recovery/crash behavior, full editor/vault/memories flows |
-| Remote access | Development pairing, read-only defaults, TLS plumbing, range downloads and verified transfers | Device keys/scopes, owner approval, encrypted network setup and production agent lifecycle |
-| Offline intelligence | Optional analysis/face-engine code exists | Verified models, People corrections, OCR/places/cleanup integration and quality tests |
+| Shared app | Paged timeline, viewer/player, 100k performance, English/Hindi UI, optional catalogue encryption | Manual accessibility review and additional languages |
+| Android | MediaStore/SAF permissions, gallery/file tools, signed updates, scheduled WorkManager backup/transfer handoff, encrypted offline copies, native emulator checks | Physical-device/OEM battery matrix |
+| Windows | Scans/watchers, stable file identity, packaged background agent, installer and updates | Trusted signing certificate and manual device review |
+| Organization | Albums/favorites/archive, recoverable Trash, editing/vault/memories and encrypted organization backup | Device certification and recovery drills |
+| Remote access | Owner approval, device keys/scopes, pinned TLS, resumable transfers, paged catalogue and delta feed | Real-network/long-duration certification and encrypted offline media cache |
+| Offline intelligence | Optional verified models, People corrections, OCR/places/cleanup and offline map | Labelled real-library recognition-quality evaluation |
 
 ## 1. Product definition
 

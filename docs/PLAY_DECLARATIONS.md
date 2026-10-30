@@ -22,9 +22,11 @@ Checked in `build/app/outputs/logs/manifest-merger-*-report.txt`.
 | `USE_BIOMETRIC` | app | no | no |
 | `REQUEST_INSTALL_PACKAGES` | app (GitHub release builds) | settings switch | **Not allowed on Play**: remove it and build without `NEXGALLERY_UPDATES` for a Play release |
 | `WAKE_LOCK` | androidx.media3 exoplayer | no | no |
+| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` | app / WorkManager | no | Data sync foreground-service declaration for opt-in backup/transfer work |
+| `POST_NOTIFICATIONS` | app | Android 13+ notification permission | Used for background transfer notifications; denied permission does not grant background data access |
 
 Not requested: `MANAGE_EXTERNAL_STORAGE`, `ACCESS_MEDIA_LOCATION`, location,
-contacts, notifications, foreground-service types, `QUERY_ALL_PACKAGES`.
+contacts, `QUERY_ALL_PACKAGES`.
 
 ## Photo and video permissions form
 

@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -15,6 +17,7 @@ import '../common/dialogs.dart';
 import '../common/file_preview.dart';
 import 'remote_stream_page.dart';
 import 'transfers_sheet.dart';
+import 'remote_library_page.dart';
 
 class RemoteBrowserPage extends StatefulWidget {
   const RemoteBrowserPage({this.session, super.key});
@@ -300,8 +303,8 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
           child: ListView(
             children: [
               const ListTile(
-                title: Text('PC Trash'),
-                subtitle: Text('Select an item to restore.'),
+                title: AppText('PC Trash'),
+                subtitle: AppText('Select an item to restore.'),
               ),
               for (final entry in entries)
                 ListTile(
@@ -310,7 +313,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
                   onTap: () => Navigator.pop(context, entry),
                 ),
               if (entries.isEmpty)
-                const ListTile(title: Text('PC Trash is empty.')),
+                const ListTile(title: AppText('PC Trash is empty.')),
             ],
           ),
         ),
@@ -336,14 +339,14 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
           Row(
             children: [
               Expanded(
-                child: Text(
+                child: AppText(
                   'My PC',
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
               ),
               if (session != null) ...[
                 IconButton(
-                  tooltip: 'Transfers',
+                  tooltip: context.tr('Transfers'),
                   onPressed: () => showTransfers(context, session.queue),
                   icon: Badge.count(
                     count: session.queue.jobs
@@ -356,7 +359,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Offline files',
+                  tooltip: context.tr('Offline files'),
                   onPressed: () => showOfflineFiles(context, session),
                   icon: const Icon(Icons.offline_pin_outlined),
                 ),
@@ -364,6 +367,20 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
             ],
           ),
           const SizedBox(height: 12),
+          if (connected && _client != null)
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const AppText('PC library'),
+              subtitle: const AppText('Photos, albums and people on your PC'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push<void>(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      RemoteLibraryPage(client: _client!, onOpen: _open),
+                ),
+              ),
+            ),
           if (!connected) ..._pairing(context) else ..._browser(context),
           if (_loading || session?.isBusy == true) ...[
             const SizedBox(height: 12),
@@ -393,7 +410,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
           child: ListTile(
             leading: const Icon(Icons.computer_rounded),
             title: Text(saved.pcName ?? Uri.parse(saved.address).host),
-            subtitle: const Text('Paired PC · not connected'),
+            subtitle: const AppText('Paired PC · not connected'),
             trailing: Wrap(
               spacing: 4,
               children: [
@@ -405,11 +422,11 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
                             await session.wake();
                             await session.reconnect();
                           },
-                    child: const Text('Wake PC'),
+                    child: const AppText('Wake PC'),
                   ),
                 FilledButton.tonal(
                   onPressed: busy ? null : session.reconnect,
-                  child: const Text('Reconnect'),
+                  child: const AppText('Reconnect'),
                 ),
               ],
             ),
@@ -423,13 +440,13 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
               dimension: 24,
               child: CircularProgressIndicator(strokeWidth: 3),
             ),
-            title: const Text('Waiting for approval on your PC'),
-            subtitle: const Text(
+            title: const AppText('Waiting for approval on your PC'),
+            subtitle: const AppText(
               'On the PC, open nexGallery > Server and choose Review.',
             ),
             trailing: TextButton(
               onPressed: session!.cancelPairing,
-              child: const Text('Cancel'),
+              child: const AppText('Cancel'),
             ),
           ),
         ),
@@ -439,18 +456,20 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              const AppText(
                 'Pair with your PC',
                 style: TextStyle(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 4),
-              const Text(
+              const AppText(
                 'Start the server in nexGallery on your PC, then scan its QR code.',
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: _name,
-                decoration: const InputDecoration(labelText: 'Device name'),
+                decoration: InputDecoration(
+                  labelText: context.tr('Device name'),
+                ),
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -460,12 +479,12 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
                   FilledButton.icon(
                     onPressed: busy ? null : _scan,
                     icon: const Icon(Icons.qr_code_scanner_rounded),
-                    label: const Text('Scan QR code'),
+                    label: const AppText('Scan QR code'),
                   ),
                   OutlinedButton.icon(
                     onPressed: _discovering ? null : _discover,
                     icon: const Icon(Icons.wifi_find_rounded),
-                    label: const Text('Find PCs on Wi-Fi'),
+                    label: const AppText('Find PCs on Wi-Fi'),
                   ),
                 ],
               ),
@@ -474,7 +493,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
                 if (found.isEmpty)
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
-                    child: Text(
+                    child: AppText(
                       'No PC answered. Make sure the server uses "Home network" and both devices are on the same Wi-Fi.',
                     ),
                   ),
@@ -491,26 +510,26 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
               ],
               ExpansionTile(
                 tilePadding: EdgeInsets.zero,
-                title: const Text('Enter details manually'),
+                title: const AppText('Enter details manually'),
                 initiallyExpanded: session == null,
                 children: [
                   TextField(
                     controller: _address,
-                    decoration: const InputDecoration(
-                      labelText: 'PC HTTPS address',
+                    decoration: InputDecoration(
+                      labelText: context.tr('PC HTTPS address'),
                     ),
                   ),
                   TextField(
                     controller: _fingerprint,
-                    decoration: const InputDecoration(
-                      labelText: 'PC certificate fingerprint',
+                    decoration: InputDecoration(
+                      labelText: context.tr('PC certificate fingerprint'),
                     ),
                   ),
                   TextField(
                     controller: _code,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'One-time pairing code',
+                    decoration: InputDecoration(
+                      labelText: context.tr('One-time pairing code'),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -523,7 +542,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
                             code: _code.text,
                             deviceName: _name.text,
                           ),
-                    child: const Text('Pair and connect'),
+                    child: const AppText('Pair and connect'),
                   ),
                 ],
               ),
@@ -552,12 +571,12 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
             ),
           ),
           PopupMenuButton<String>(
-            tooltip: 'Connection options',
+            tooltip: context.tr('Connection options'),
             onSelected: (value) =>
                 session.disconnect(forget: value == 'forget'),
             itemBuilder: (_) => const [
-              PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
-              PopupMenuItem(value: 'forget', child: Text('Forget this PC')),
+              PopupMenuItem(value: 'disconnect', child: AppText('Disconnect')),
+              PopupMenuItem(value: 'forget', child: AppText('Forget this PC')),
             ],
           ),
         ],
@@ -571,7 +590,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
       DropdownButtonFormField<String>(
         key: ValueKey(_root),
         initialValue: _root,
-        decoration: const InputDecoration(labelText: 'Shared folder'),
+        decoration: InputDecoration(labelText: context.tr('Shared folder')),
         items: [
           for (final root in _roots)
             DropdownMenuItem(value: root.id, child: Text(root.name)),
@@ -590,8 +609,8 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
       const SizedBox(height: 12),
       TextField(
         controller: _search,
-        decoration: const InputDecoration(
-          hintText: 'Search PC files',
+        decoration: InputDecoration(
+          hintText: context.tr('Search PC files'),
           prefixIcon: Icon(Icons.search),
         ),
         onSubmitted: (_) => _run(_load),
@@ -601,7 +620,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           IconButton(
-            tooltip: 'Parent folder',
+            tooltip: context.tr('Parent folder'),
             onPressed: _loading || _path.isEmpty
                 ? null
                 : () {
@@ -615,7 +634,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
             icon: const Icon(Icons.arrow_upward),
           ),
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: context.tr('Refresh'),
             onPressed: _loading ? null : () => _run(_load),
             icon: const Icon(Icons.refresh),
           ),
@@ -623,7 +642,7 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
             TextButton.icon(
               onPressed: _loading ? null : _upload,
               icon: const Icon(Icons.upload),
-              label: const Text('Upload'),
+              label: const AppText('Upload'),
             ),
           if (session.allows(DeviceScope.organize))
             TextButton.icon(
@@ -647,13 +666,13 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
                       }
                     },
               icon: const Icon(Icons.create_new_folder),
-              label: const Text('New folder'),
+              label: const AppText('New folder'),
             ),
           if (session.allows(DeviceScope.trash))
             TextButton.icon(
               onPressed: _loading ? null : _pcTrash,
               icon: const Icon(Icons.delete_outline),
-              label: const Text('PC Trash'),
+              label: const AppText('PC Trash'),
             ),
         ],
       ),
@@ -705,26 +724,26 @@ class _RemoteBrowserPageState extends State<RemoteBrowserPage> {
               if (!entry.isDirectory) ...[
                 const PopupMenuItem(
                   value: 'open',
-                  child: Text('Open / stream'),
+                  child: AppText('Open / stream'),
                 ),
                 if (session.allows(DeviceScope.download))
                   const PopupMenuItem(
                     value: 'offline',
-                    child: Text('Keep offline'),
+                    child: AppText('Keep offline'),
                   ),
               ],
               if (session.allows(DeviceScope.organize))
-                const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                const PopupMenuItem(value: 'rename', child: AppText('Rename')),
               if (session.allows(DeviceScope.trash))
                 const PopupMenuItem(
                   value: 'trash',
-                  child: Text('Move to PC Trash'),
+                  child: AppText('Move to PC Trash'),
                 ),
             ],
           ),
         ),
       if (!_loading && _entries.isEmpty)
-        const ListTile(title: Text('No files in this view.')),
+        const ListTile(title: AppText('No files in this view.')),
     ];
   }
 }
@@ -805,7 +824,7 @@ class _RemotePhotoPage extends StatelessWidget {
       actions: [
         if (onKeepOffline != null)
           IconButton(
-            tooltip: 'Keep original offline',
+            tooltip: context.tr('Keep original offline'),
             onPressed: onKeepOffline,
             icon: const Icon(Icons.download_for_offline_outlined),
           ),
@@ -841,7 +860,7 @@ Future<void> showOfflineFiles(
   final files = await session.offlineFiles();
   final total = await session.offlineBytes();
   if (!context.mounted) return;
-  final selected = await showModalBottomSheet<(File?, String)>(
+  final selected = await showModalBottomSheet<(OfflineMedia?, String)>(
     context: context,
     isScrollControlled: true,
     builder: (context) => SafeArea(
@@ -853,7 +872,7 @@ Future<void> showOfflineFiles(
           shrinkWrap: true,
           children: [
             ListTile(
-              title: const Text('Offline files'),
+              title: const AppText('Offline files'),
               subtitle: Text(
                 '${files.length} files · ${formatBytes(total)} on this phone',
               ),
@@ -861,31 +880,31 @@ Future<void> showOfflineFiles(
                   ? null
                   : TextButton(
                       onPressed: () => Navigator.pop(context, (null, 'clear')),
-                      child: const Text('Remove all'),
+                      child: const AppText('Remove all'),
                     ),
             ),
             for (final file in files)
               ListTile(
-                title: Text(p.basename(file.path)),
+                title: Text(file.name),
                 onTap: () => Navigator.pop(context, (file, 'open')),
                 trailing: PopupMenuButton<String>(
                   onSelected: (v) => Navigator.pop(context, (file, v)),
                   itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'share', child: Text('Share')),
+                    PopupMenuItem(value: 'share', child: AppText('Share')),
                     PopupMenuItem(
                       value: 'export',
-                      child: Text('Save to folder'),
+                      child: AppText('Save to folder'),
                     ),
                     PopupMenuItem(
                       value: 'delete',
-                      child: Text('Remove offline copy'),
+                      child: AppText('Remove offline copy'),
                     ),
                   ],
                 ),
               ),
             if (files.isEmpty)
               const ListTile(
-                title: Text(
+                title: AppText(
                   'Use "Keep offline" on a PC file to save a copy here.',
                 ),
               ),
@@ -895,8 +914,14 @@ Future<void> showOfflineFiles(
     ),
   );
   if (selected == null || !context.mounted) return;
-  final (file, action) = selected;
+  final (media, action) = selected;
   try {
+    // Decrypt only after the owner explicitly opens, shares or exports a copy.
+    final file =
+        media != null && const ['open', 'share', 'export'].contains(action)
+        ? await session.materializeOffline(media)
+        : null;
+    if (!context.mounted) return;
     switch (action) {
       case 'clear':
         final confirmed = await confirmAction(
@@ -909,6 +934,15 @@ Future<void> showOfflineFiles(
       case 'share':
         await AndroidMediaBridge.instance.shareAppFile(file!.path);
       case 'export':
+        if (!await confirmAction(
+              context,
+              title: 'Save a public copy?',
+              message: 'A copy saved outside nexGallery is no longer encrypted by this app and cannot be revoked from your PC.',
+              action: 'Save copy',
+            ) ||
+            !context.mounted) {
+          return;
+        }
         final destination = await AndroidMediaBridge.instance.pickDirectory();
         if (destination.uri != null) {
           await AndroidMediaBridge.instance.exportAppFile(
@@ -918,7 +952,7 @@ Future<void> showOfflineFiles(
           );
         }
       case 'delete':
-        await file!.delete();
+        await media!.file.delete();
       default:
         final video = _videoPattern.hasMatch(file!.path);
         if ((video || _imagePattern.hasMatch(file.path)) && context.mounted) {

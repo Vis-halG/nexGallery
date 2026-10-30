@@ -7,7 +7,8 @@ is enabled.
 Never attach personal media, database files, pairing QR codes, tokens, signing
 keys or server logs containing private paths to an issue.
 
-The current repository is a foundation build and must not be exposed as a public
-file server. Remote access will be enabled only after device pairing, root-path
-authorization, traversal tests, rate limiting, revocation and audit controls are
-implemented and reviewed.
+The direct-download builds are early access. Device pairing, signed requests,
+root-path authorization, traversal tests, rate limiting, revocation and audit
+controls are implemented. Use a trusted home LAN or a private Tailscale network;
+do not expose the server with public port forwarding. Consult the threat model
+and implementation status for remaining physical-device and independent-review work.

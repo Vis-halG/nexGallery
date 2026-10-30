@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+
+import '../l10n/app_strings.dart';
 
 import 'gallery_model.dart';
 import 'gallery_runtime.dart';
@@ -38,6 +41,16 @@ class _NexGalleryAppState extends State<NexGalleryApp> {
     builder: (context, _) {
       return MaterialApp(
         title: 'nexGallery',
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [
+          AppStrings.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        locale: _model.settings.language == 'system'
+            ? null
+            : Locale(_model.settings.language),
         debugShowCheckedModeBanner: false,
         themeMode: switch (_model.settings.appearance) {
           GalleryAppearance.system => ThemeMode.system,

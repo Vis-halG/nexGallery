@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -125,8 +127,9 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
       final output = await Isolate.run(() => editImage(bytes, edit));
       await widget.tools.saveEditedCopy(widget.item, output);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Edited copy saved.')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: AppText('Edited copy saved.')));
         Navigator.pop(context);
       }
     } catch (e) {
@@ -243,11 +246,11 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Edit photo'),
+      title: const AppText('Edit photo'),
       actions: [
         TextButton(
           onPressed: _busy || _source == null ? null : _save,
-          child: const Text('Save copy'),
+          child: const AppText('Save copy'),
         ),
       ],
     ),
@@ -270,17 +273,17 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
             OutlinedButton.icon(
               onPressed: _busy ? null : () => _change(() => _turns++),
               icon: const Icon(Icons.rotate_right),
-              label: const Text('Rotate'),
+              label: const AppText('Rotate'),
             ),
             OutlinedButton.icon(
               onPressed: _busy ? null : () => _change(() => _flip = !_flip),
               icon: const Icon(Icons.flip),
-              label: const Text('Flip'),
+              label: const AppText('Flip'),
             ),
             FilterChip(
               selected: _drawing,
               avatar: const Icon(Icons.draw_rounded, size: 18),
-              label: const Text('Draw'),
+              label: const AppText('Draw'),
               onSelected: _busy
                   ? null
                   : (value) => setState(() => _drawing = value),
@@ -299,7 +302,7 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
                       _horizontal = _vertical = const RangeValues(0, 1);
                       _text.clear();
                     }),
-              child: const Text('Reset'),
+              child: const AppText('Reset'),
             ),
           ],
         ),
@@ -330,7 +333,7 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
                 ),
               const Spacer(),
               IconButton(
-                tooltip: 'Undo last stroke',
+                tooltip: context.tr('Undo last stroke'),
                 onPressed: _strokes.isEmpty || _busy
                     ? null
                     : () => _change(_strokes.removeLast),
@@ -338,10 +341,10 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
               ),
             ],
           ),
-          const Text('Draw on the photo with your finger or mouse.'),
+          const AppText('Draw on the photo with your finger or mouse.'),
         ],
         const SizedBox(height: 16),
-        const Text('Filters'),
+        const AppText('Filters'),
         const SizedBox(height: 6),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -369,7 +372,7 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
           15,
           (v) => _straighten = (v * 2).roundToDouble() / 2,
         ),
-        const Text('Horizontal crop'),
+        const AppText('Horizontal crop'),
         RangeSlider(
           values: _horizontal,
           onChanged: _busy
@@ -379,7 +382,7 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
                 },
           onChangeEnd: (_) => _render(),
         ),
-        const Text('Vertical crop'),
+        const AppText('Vertical crop'),
         RangeSlider(
           values: _vertical,
           onChanged: _busy
@@ -396,10 +399,10 @@ class _PhotoEditorPageState extends State<PhotoEditorPage> {
         TextField(
           controller: _text,
           maxLength: 120,
-          decoration: const InputDecoration(labelText: 'Add text'),
+          decoration: InputDecoration(labelText: context.tr('Add text')),
           onSubmitted: (_) => _render(),
         ),
-        const Text(
+        const AppText(
           'Your original stays unchanged. The edited copy is saved as a PNG.',
         ),
         const SizedBox(height: 24),

@@ -5,9 +5,10 @@ themselves are in [the product plan, §15](NEXGALLERY_PRODUCT_AND_BUILD_PLAN.md)
 
 ## Versions
 
-- `pubspec.yaml` `version: X.Y.Z+N`. Flutter gives the split APKs version
-  codes `1000+N` (ARM32) and `2000+N` (ARM64), so `N` stays below 1000 under
-  this scheme.
+- `pubspec.yaml` `version: X.Y.Z+N`. The release workflow overrides `N` with
+  its increasing run number and sets `force-version-code-ignoring-abi=true`.
+  ARM splits and Universal use the same increasing code without the old
+  1,000-build ABI-offset limit. Local development splits retain Flutter defaults.
 - Every published build increases `N`. Android refuses to install a lower
   version code, so a rollback is a new build with the previous code and a
   higher `N`.
@@ -32,7 +33,8 @@ themselves are in [the product plan, §15](NEXGALLERY_PRODUCT_AND_BUILD_PLAN.md)
 ## Windows
 
 1. `dart run tool/build_server.dart` builds the background agent; the
-   Windows build copies it next to `nex_gallery.exe`.
+   Windows build preserves its native assets in `server/bin` and `server/lib`
+   below the application directory. The build uses `dart build cli`.
 2. `flutter build windows --release`, then
    `iscc /DAppVersion=X.Y.Z /DSign windows\installer\nexgallery.iss` with a
    configured `nexsign` SignTool (code-signing certificate with timestamping).
@@ -44,14 +46,16 @@ themselves are in [the product plan, §15](NEXGALLERY_PRODUCT_AND_BUILD_PLAN.md)
 
 ## In-app updates (GitHub releases)
 
-Every push to `main` runs `.github/workflows/release.yml`. It builds split
-APKs signed with the release key, the Windows installer and `update.json`,
-and publishes them as the GitHub release `build-<run number>`, marked latest.
+Every push to `main` runs `.github/workflows/release.yml`. Passing release checks
+and native API 24/29/33/36 tests gate signing, ARM splits, Universal ARM,
+the Windows installer and `update.json`. They publish as `build-<run number>`,
+marked latest. Windows Authenticode uses optional owner-provided certificate
+secrets; otherwise its early-access installer is explicitly unsigned.
 
 - Builds from that workflow carry `NEXGALLERY_BUILD`, `NEXGALLERY_VERSION`
   and `NEXGALLERY_UPDATES=true`. A few seconds after start they read
   `https://github.com/Vis-halG/nexGallery/releases/latest/download/update.json`
-  (Settings → App updates can turn this off), offer a newer build in a banner,
+  (Settings → App updates can turn this off), offer a newer build in a popup,
   download the file for the phone's ABI or the Windows installer, and check
   its size and SHA-256 before installing. Only URLs under this repository's
   `releases/download/` are accepted.
@@ -68,10 +72,11 @@ One-time setup on the PC (creates the key and the GitHub secrets
 powershell -ExecutionPolicy Bypass -File tool\setup_release_signing.ps1
 ```
 
-Keep the printed password and `Documents\nexGallery-signing\nexgallery-release.jks`
-somewhere safe. Phones that installed a build signed with another key (for
-example a local development build) must uninstall it once before installing a
-release build.
+The password is never printed. A Windows-user-protected recovery file is saved
+beside `Documents\nexGallery-signing\nexgallery-release.jks`; keep a separate
+portable recovery backup in a password manager as well as the keystore backup.
+Phones with a differently signed development APK need the one-time transition
+in [UPDATES.md](UPDATES.md). Export private content and organization first.
 
 ## Release checklist
 

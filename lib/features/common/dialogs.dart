@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../core/catalog_models.dart';
@@ -15,14 +17,14 @@ Future<String?> promptText(
   final value = await showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
-      title: Text(title),
+      title: AppText(title),
       content: TextField(
         controller: controller,
         autofocus: true,
         maxLength: maxLength,
         textCapitalization: TextCapitalization.sentences,
         decoration: InputDecoration(
-          labelText: label,
+          labelText: context.tr(label),
           border: const OutlineInputBorder(),
         ),
         onSubmitted: (value) => Navigator.pop(context, value),
@@ -30,11 +32,11 @@ Future<String?> promptText(
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: const AppText('Cancel'),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, controller.text),
-          child: Text(action),
+          child: AppText(action),
         ),
       ],
     ),
@@ -53,16 +55,16 @@ Future<bool> confirmAction(
     await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
+        title: AppText(title),
+        content: AppText(message),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: const AppText('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(action),
+            child: AppText(action),
           ),
         ],
       ),
@@ -109,7 +111,7 @@ Future<String?> promptPassword(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
-        title: Text(title),
+        title: AppText(title),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -121,7 +123,7 @@ Future<String?> promptPassword(
               obscureText: true,
               enableSuggestions: false,
               autocorrect: false,
-              decoration: const InputDecoration(labelText: 'Password'),
+              decoration: InputDecoration(labelText: context.tr('Password')),
             ),
             if (confirm)
               TextField(
@@ -129,8 +131,8 @@ Future<String?> promptPassword(
                 obscureText: true,
                 enableSuggestions: false,
                 autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Confirm password',
+                decoration: InputDecoration(
+                  labelText: context.tr('Confirm password'),
                 ),
               ),
             if (error != null)
@@ -146,7 +148,7 @@ Future<String?> promptPassword(
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: const AppText('Cancel'),
           ),
           FilledButton(
             onPressed: () {
@@ -158,7 +160,7 @@ Future<String?> promptPassword(
                 Navigator.pop(context, first.text);
               }
             },
-            child: const Text('Continue'),
+            child: const AppText('Continue'),
           ),
         ],
       ),
@@ -188,7 +190,7 @@ Future<String?> pickAlbum(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-            child: Text(
+            child: AppText(
               'Add to album',
               style: Theme.of(context).textTheme.titleLarge
                   ?.copyWith(fontWeight: FontWeight.w800),
@@ -196,7 +198,7 @@ Future<String?> pickAlbum(
           ),
           ListTile(
             leading: const Icon(Icons.add_rounded),
-            title: const Text('New album'),
+            title: const AppText('New album'),
             onTap: () async {
               final name = await promptText(
                 context,

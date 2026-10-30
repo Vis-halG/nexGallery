@@ -30,12 +30,15 @@ import java.util.concurrent.Executors
 
 /** Device state used to schedule heavy local work, plus wallpaper actions. */
 class DeviceTools(
-    private val activity: Activity,
+    private val context: Context,
     messenger: BinaryMessenger,
+    private val activityProvider: () -> Activity? = { null },
 ) : MethodChannel.MethodCallHandler {
+    private val activity: Activity get() = requireNotNull(activityProvider()) { "This action needs an open nexGallery window" }
     private val channel = MethodChannel(messenger, "com.thenex.nex_gallery/device")
     private val worker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var transferOwner: String? = null
 
     init {
         channel.setMethodCallHandler(this)
@@ -43,6 +46,35 @@ class DeviceTools(
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "claimTransferSession" -> {
+                val owner = call.argument<String>("owner") ?: ""
+                if (!Regex("^[A-Za-z0-9_-]{1,96}$").matches(owner)) { result.error("invalid_owner", "Invalid transfer owner", null); return }
+                val claimed = TransferCoordinator.claim(owner)
+                if (claimed) transferOwner = owner
+                result.success(claimed)
+            }
+            "releaseTransferSession" -> {
+                val owner = call.argument<String>("owner") ?: ""
+                if (owner == transferOwner) { TransferCoordinator.release(owner); transferOwner = null }
+                result.success(null)
+            }
+            "configureBackground" -> {
+                BackgroundTransfers.configure(context, call.argument<Boolean>("periodic") == true,
+                    call.argument<Boolean>("transfers") == true, call.argument<Boolean>("wifiOnly") != false,
+                    call.argument<Boolean>("chargingOnly") != false, call.argument<Number>("minutes")?.toLong() ?: 60L,
+                    call.argument<Number>("callbackHandle")?.toLong() ?: 0L)
+                result.success(null)
+            }
+            "runBackgroundNow" -> { BackgroundTransfers.runNow(context); result.success(null) }
+            "runBackgroundReadiness" -> {
+                if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) { result.notImplemented(); return }
+                result.success(BackgroundTransfers.readiness(context, call.argument<Number>("callbackHandle")?.toLong() ?: 0L).toString())
+            }
+            "backgroundWorkStatus" -> runAsync(result) {
+                val id = java.util.UUID.fromString(call.argument<String>("id"))
+                val work = androidx.work.WorkManager.getInstance(context).getWorkInfoById(id).get()
+                mapOf("state" to work?.state?.name, "ok" to work?.outputData?.getBoolean("ok", false), "error" to work?.outputData?.getString("error"))
+            }
             "setWallpaper" -> runAsync(result) { setWallpaper(call) }
             "getDeviceConditions" -> result.success(conditions())
             "getNetworkState" -> result.success(networkState())
@@ -77,25 +109,25 @@ class DeviceTools(
     /// lets nexGallery install apps.
     private fun installApk(call: MethodCall, result: MethodChannel.Result) {
         val path = call.argument<String>("path")
-        val updates = File(activity.cacheDir, "updates").canonicalFile
+        val updates = File(context.cacheDir, "updates").canonicalFile
         val file = path?.let { File(it).canonicalFile }
         if (file == null || file.parentFile != updates || !file.name.endsWith(".apk") || !file.isFile) {
             result.error("invalid_update", "Only downloaded updates can be installed", null)
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !activity.packageManager.canRequestPackageInstalls()
+            !context.packageManager.canRequestPackageInstalls()
         ) {
             activity.startActivity(
                 Intent(
                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:${activity.packageName}"),
+                    Uri.parse("package:${context.packageName}"),
                 ),
             )
             result.success("needsPermission")
             return
         }
-        val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+        val uri = FileProvider.getUriForFile(activity, "${context.packageName}.fileprovider", file)
         activity.startActivity(
             Intent(Intent.ACTION_VIEW)
                 .setDataAndType(uri, "application/vnd.android.package-archive")
@@ -117,7 +149,7 @@ class DeviceTools(
         }
         val title = call.argument<String>("title") ?: "Confirm it's you"
         val subtitle = call.argument<String>("subtitle") ?: ""
-        val keyguard = activity.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         if (!keyguard.isDeviceSecure) {
             result.success("notSecured")
             return
@@ -202,20 +234,20 @@ class DeviceTools(
             "lock" -> WallpaperManager.FLAG_LOCK
             else -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
         }
-        val stream = activity.contentResolver.openInputStream(uri)
+        val stream = context.contentResolver.openInputStream(uri)
             ?: throw FileNotFoundException("The image could not be opened")
         stream.use { manager.setStream(it, null, true, flags) }
         return mapOf("status" to "completed")
     }
 
     private fun conditions(): Map<String, Any?> {
-        val battery = activity.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
         val status = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        val power = activity.getSystemService(PowerManager::class.java)
+        val power = context.getSystemService(PowerManager::class.java)
         val memory = ActivityManager.MemoryInfo()
-        val activityManager = activity.getSystemService(ActivityManager::class.java)
+        val activityManager = context.getSystemService(ActivityManager::class.java)
         activityManager?.getMemoryInfo(memory)
         return mapOf(
             "charging" to (
@@ -233,7 +265,7 @@ class DeviceTools(
     }
 
     private fun networkState(): Map<String, Any> {
-        val manager = activity.getSystemService(ConnectivityManager::class.java)
+        val manager = context.getSystemService(ConnectivityManager::class.java)
             ?: return mapOf("connected" to false)
         val capabilities = manager.getNetworkCapabilities(manager.activeNetwork)
             ?: return mapOf("connected" to false)
@@ -263,6 +295,8 @@ class DeviceTools(
     }
 
     fun dispose() {
+        transferOwner?.let { TransferCoordinator.release(it) }
+        transferOwner = null
         channel.setMethodCallHandler(null)
         worker.shutdown()
     }

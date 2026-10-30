@@ -128,6 +128,30 @@ void main() {
           installer: (file) async => installed?.add(file),
         );
 
+    test('one Update action verifies the file and invokes the installer; a manual check can reopen a dismissed offer', () async {
+      final bytes = utf8.encode('verified installer fixture');
+      files = {'/releases/build-9/test.apk': bytes};
+      manifest = {
+        'schema': 1,
+        'version': '0.2.0',
+        'build': 9,
+        'notes': 'New version',
+        'android': {'arm64-v8a': _asset('${prefix}build-9/test.apk', bytes)},
+        'windows': {},
+      };
+      final installed = <File>[];
+      final app = updater(current: 8, installed: installed);
+      expect(await app.check(), isTrue);
+      app.dismiss();
+      expect(app.offering, isFalse);
+      await app.check(userInitiated: true);
+      expect(app.offering, isTrue);
+      await app.updateNow();
+      expect(installed, hasLength(1));
+      expect(await installed.single.readAsBytes(), bytes);
+      app.dispose();
+    });
+
     void publish(int build, List<int> apk, {List<int>? served}) {
       final name = 'nexGallery-0.1.0-build$build-arm64-v8a.apk';
       files = {'/releases/$name': served ?? apk};
@@ -175,6 +199,25 @@ void main() {
       expect(installed, isEmpty);
       final left = Directory(p.join(workspace.path, 'updates')).listSync();
       expect(left, isEmpty);
+    });
+
+    test('an installer changed after verification is refused and can be downloaded again', () async {
+      publish(9, utf8.encode('verified apk'));
+      final installed = <File>[];
+      final app = updater(current: 7, installed: installed);
+      await app.check();
+      await app.download();
+      final downloaded = Directory(p.join(workspace.path, 'updates'))
+          .listSync()
+          .whereType<File>()
+          .single;
+      await downloaded.writeAsString('tampered');
+      await app.install();
+      expect(app.status, UpdateStatus.failed);
+      expect(installed, isEmpty);
+      await Future.wait([app.updateNow(), app.updateNow()]);
+      expect(installed, hasLength(1));
+      app.dispose();
     });
 
     test('the installed or an older build is not offered', () async {

@@ -38,11 +38,17 @@ final class AgentManager {
     await Process.start(executable, arguments, mode: ProcessStartMode.detached);
   }
 
-  /// The installer places the agent next to the app executable.
+  /// The native-asset bundle keeps bin/ and lib/ together below server/.
   Future<File?> findExecutable() async {
     final candidates = [
       ?executableOverride,
       ?Platform.environment['NEXGALLERY_SERVER_EXE'],
+      p.join(
+        p.dirname(Platform.resolvedExecutable),
+        'server',
+        'bin',
+        executableName,
+      ),
       p.join(p.dirname(Platform.resolvedExecutable), executableName),
     ];
     for (final path in candidates) {

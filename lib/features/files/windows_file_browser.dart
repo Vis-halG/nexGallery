@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -71,11 +73,11 @@ class _WindowsFileBrowserState extends State<WindowsFileBrowser> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: const AppText('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, text.text),
-            child: const Text('Save'),
+            child: const AppText('Save'),
           ),
         ],
       ),
@@ -152,16 +154,16 @@ class _WindowsFileBrowserState extends State<WindowsFileBrowser> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Browse folders'),
+      title: const AppText('Browse folders'),
       actions: [
         IconButton(
-          tooltip: 'Choose folder',
+          tooltip: context.tr('Choose folder'),
           onPressed: _busy ? null : _choose,
           icon: const Icon(Icons.folder_open),
         ),
         if (_path != null)
           IconButton(
-            tooltip: 'Create folder',
+            tooltip: context.tr('Create folder'),
             onPressed: _busy ? null : _newFolder,
             icon: const Icon(Icons.create_new_folder_outlined),
           ),
@@ -181,7 +183,7 @@ class _WindowsFileBrowserState extends State<WindowsFileBrowser> {
         if (_path != null)
           ListTile(
             leading: IconButton(
-              tooltip: 'Parent folder',
+              tooltip: context.tr('Parent folder'),
               onPressed: _busy || _path == _root
                   ? null
                   : () => _run(() async {
@@ -192,7 +194,7 @@ class _WindowsFileBrowserState extends State<WindowsFileBrowser> {
             ),
             title: SelectableText(_path!),
             trailing: IconButton(
-              tooltip: 'Refresh',
+              tooltip: context.tr('Refresh'),
               onPressed: _busy ? null : () => _run(_load),
               icon: const Icon(Icons.refresh),
             ),
@@ -203,7 +205,7 @@ class _WindowsFileBrowserState extends State<WindowsFileBrowser> {
             child: FilledButton.icon(
               onPressed: _busy ? null : _choose,
               icon: const Icon(Icons.folder_open),
-              label: const Text('Choose a folder'),
+              label: const AppText('Choose a folder'),
             ),
           ),
         Expanded(
@@ -229,24 +231,27 @@ class _WindowsFileBrowserState extends State<WindowsFileBrowser> {
                   enabled: !_busy && entry is! Link,
                   onSelected: (v) => _action(entry, v),
                   itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                    const PopupMenuItem(
+                      value: 'rename',
+                      child: AppText('Rename'),
+                    ),
                     const PopupMenuItem(
                       value: 'copy',
-                      child: Text('Copy to folder'),
+                      child: AppText('Copy to folder'),
                     ),
                     const PopupMenuItem(
                       value: 'move',
-                      child: Text('Move to folder'),
+                      child: AppText('Move to folder'),
                     ),
                     const PopupMenuItem(
                       value: 'zip',
-                      child: Text('Create ZIP'),
+                      child: AppText('Create ZIP'),
                     ),
                     if (!directory &&
                         p.extension(entry.path).toLowerCase() == '.zip')
                       const PopupMenuItem(
                         value: 'extract',
-                        child: Text('Extract ZIP'),
+                        child: AppText('Extract ZIP'),
                       ),
                   ],
                 ),

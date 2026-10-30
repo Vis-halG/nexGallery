@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nex_gallery/services/remote/nex_gallery_client.dart';
@@ -95,6 +96,94 @@ void main() {
     );
     await queue.clearFinished();
     expect(queue.jobs, isEmpty);
+  });
+
+  test('handoff checkpoints an active upload and a fresh queue resumes without unpausing user-paused work', () async {
+    final queue = newQueue(chunkBytes: 64 * 1024);
+    final source = await File(p.join(workspace.path, 'handoff.bin'))
+        .writeAsBytes(List.generate(640 * 1024, (i) => i % 251));
+    final active = await queue.enqueueUpload(
+      name: 'handoff.bin',
+      root: 'pc',
+      remotePath: 'handoff.bin',
+      source: source,
+    );
+    final paused = await queue.enqueueUpload(
+      name: 'paused.txt',
+      root: 'pc',
+      remotePath: 'paused.txt',
+      source: await localFile('paused.txt', 'paused'),
+    );
+    queue.pause(paused.id);
+    final checkpoint = Completer<void>();
+    queue.addListener(() {
+      if (!checkpoint.isCompleted &&
+          active.status == TransferStatus.running &&
+          active.done > 0) {
+        queue.beginHandoff();
+        checkpoint.complete();
+      }
+    });
+    queue.client = client;
+    await checkpoint.future;
+    await queue.flush();
+    final offset = active.done;
+    expect(active.status, TransferStatus.queued);
+    expect(paused.status, TransferStatus.paused);
+    queue.dispose();
+    final next = newQueue(chunkBytes: 64 * 1024);
+    await next.load();
+    next.client = client;
+    await settle(next);
+    expect(
+      next.jobs.firstWhere((v) => v.id == active.id).status,
+      TransferStatus.done,
+    );
+    expect(
+      next.jobs.firstWhere((v) => v.id == paused.id).status,
+      TransferStatus.paused,
+    );
+    expect(offset, greaterThan(0));
+    expect(
+      await File(p.join(shared.path, 'handoff.bin')).readAsBytes(),
+      await source.readAsBytes(),
+    );
+    await next.flush();
+    next.dispose();
+  });
+
+  test('a crash between journal rotation and commit recovers all jobs; future schemas are never overwritten', () async {
+    final queue = newQueue();
+    await queue.enqueueUpload(
+      name: 'a.txt',
+      root: 'pc',
+      remotePath: 'a.txt',
+      source: await localFile('a.txt', 'a'),
+    );
+    await queue.flush();
+    queue.dispose();
+    final index = File(p.join(workspace.path, 'queue', 'jobs.json'));
+    final previous = File('${index.path}.previous');
+    if (await previous.exists()) await previous.delete();
+    await index.rename(previous.path);
+    final recovered = newQueue();
+    await recovered.load();
+    expect(recovered.jobs.single.name, 'a.txt');
+    recovered.dispose();
+    await index.writeAsString('{"version":99,"jobs":[]}');
+    final future = newQueue();
+    await expectLater(future.load(), throwsUnsupportedError);
+    await expectLater(
+      future.enqueueUpload(
+        name: 'b.txt',
+        root: 'pc',
+        remotePath: 'b.txt',
+        source: await localFile('b.txt', 'b'),
+      ),
+      throwsStateError,
+    );
+    expect(await index.readAsString(), '{"version":99,"jobs":[]}');
+    future.dispose();
   });
 
   test('conflicts can be asked, kept twice, skipped or replaced', () async {

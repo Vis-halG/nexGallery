@@ -32,7 +32,7 @@ jobs:
 
       - name: Format, analyze and test
         run: |
-          dart format --output=none --set-exit-if-changed lib test
+          dart format --output=none --set-exit-if-changed lib test integration_test tool
           flutter analyze
           flutter test --exclude-tags performance
           # The 100,000-item budget runs alone so other suites cannot skew it.

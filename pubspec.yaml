@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ^3.13.3
@@ -29,6 +29,8 @@ environment:
 # versions available, run `flutter pub outdated`.
 dependencies:
   flutter:
+    sdk: flutter
+  flutter_localizations:
     sdk: flutter
   sqlite3: ^3.5.2
   video_player: ^2.14.0
@@ -74,6 +76,9 @@ flutter:
     - docs/third-party/MODEL_PACKS_NOTICE.txt
     - assets/places/cities.tsv.gz
     - assets/models/imagenet_labels.txt
+    - assets/maps/land.geojson
+    - assets/l10n/hi.json
+    - docs/third-party/NATURAL_EARTH_NOTICE.txt
 
   # To add assets to your application, add an assets section, like this:
   # assets:

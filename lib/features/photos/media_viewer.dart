@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -132,7 +134,7 @@ class _MediaViewerState extends State<MediaViewer> {
                     Row(
                       children: [
                         IconButton(
-                          tooltip: 'Close viewer',
+                          tooltip: context.tr('Close viewer'),
                           color: Colors.white,
                           onPressed: () => Navigator.pop(context),
                           icon: const Icon(Icons.close_rounded),
@@ -183,7 +185,7 @@ class _MediaViewerState extends State<MediaViewer> {
                           ),
                         if (authorized)
                           PopupMenuButton<String>(
-                            tooltip: 'Viewer actions',
+                            tooltip: context.tr('Viewer actions'),
                             iconColor: Colors.white,
                             onSelected: (action) {
                               if (!widget.model.canAccessMedia(current)) return;
@@ -225,26 +227,26 @@ class _MediaViewerState extends State<MediaViewer> {
                                   current.section != MediaSection.trash) ...[
                                 const PopupMenuItem(
                                   value: 'album',
-                                  child: Text('Add to album'),
+                                  child: AppText('Add to album'),
                                 ),
                                 if (_organizer!.activeAlbumId != null) ...[
                                   const PopupMenuItem(
                                     value: 'cover',
-                                    child: Text('Use as album cover'),
+                                    child: AppText('Use as album cover'),
                                   ),
                                   const PopupMenuItem(
                                     value: 'remove-album',
-                                    child: Text('Remove from this album'),
+                                    child: AppText('Remove from this album'),
                                   ),
                                 ],
                                 if (current.kind == MediaKind.image)
                                   const PopupMenuItem(
                                     value: 'wallpaper',
-                                    child: Text('Set as wallpaper'),
+                                    child: AppText('Set as wallpaper'),
                                   ),
                                 const PopupMenuItem(
                                   value: 'correct',
-                                  child: Text('Adjust date and location'),
+                                  child: AppText('Adjust date and location'),
                                 ),
                               ],
                               if (widget.model is GalleryTools &&
@@ -262,16 +264,16 @@ class _MediaViewerState extends State<MediaViewer> {
                               PopupMenuItem(
                                 value: 'share',
                                 enabled: current.isAvailable,
-                                child: const Text('Share'),
+                                child: const AppText('Share'),
                               ),
                               PopupMenuItem(
                                 value: 'open',
                                 enabled: current.isAvailable,
-                                child: const Text('Open with another app'),
+                                child: const AppText('Open with another app'),
                               ),
                               const PopupMenuItem(
                                 value: 'details',
-                                child: Text('Details'),
+                                child: AppText('Details'),
                               ),
                             ],
                           ),
@@ -300,7 +302,7 @@ class _MediaViewerState extends State<MediaViewer> {
                       child: Row(
                         children: [
                           IconButton(
-                            tooltip: 'Previous item',
+                            tooltip: context.tr('Previous item'),
                             color: Colors.white,
                             onPressed: _index > 0 ? () => _go(-1) : null,
                             icon: const Icon(Icons.chevron_left_rounded),
@@ -316,7 +318,7 @@ class _MediaViewerState extends State<MediaViewer> {
                             ),
                           ),
                           IconButton(
-                            tooltip: 'Next item',
+                            tooltip: context.tr('Next item'),
                             color: Colors.white,
                             onPressed: _index + 1 < _items.length
                                 ? () => _go(1)
@@ -511,7 +513,7 @@ class _MediaViewerState extends State<MediaViewer> {
                   shrinkWrap: true,
                   padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
                   children: [
-                    Text(
+                    AppText(
                       'Details',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),

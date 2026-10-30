@@ -1,3 +1,5 @@
+import '../l10n/app_strings.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -11,6 +13,7 @@ import '../features/photos/photos_page.dart';
 import '../features/remote/remote_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/updates/update_banner.dart';
+import '../features/updates/update_dialog.dart';
 import '../services/remote/remote_session.dart';
 import '../services/updates/app_update.dart';
 import 'android_secret_store.dart';
@@ -38,6 +41,9 @@ class _NexGalleryHomeState extends State<NexGalleryHome>
   late final bool _ownsModel;
   RemoteSession? _session;
   AppUpdater? _updater;
+  DateTime? _lastUpdateCheck;
+  int? _promptedBuild;
+  bool _checkingUpdate = false;
   var _index = 0;
 
   bool get _isWindows =>
@@ -51,10 +57,15 @@ class _NexGalleryHomeState extends State<NexGalleryHome>
     _model = widget.model ?? NexGalleryRuntime(platform: widget.platform);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _model.initialize();
-      if (!_isWindows) unawaited(_openRemoteSession());
-      if (updatesEnabled) unawaited(_startUpdates());
+      unawaited(_initializeHome());
     });
+  }
+
+  Future<void> _initializeHome() async {
+    await _model.initialize();
+    if (!mounted) return;
+    if (!_isWindows) unawaited(_openRemoteSession());
+    if (updatesEnabled) unawaited(_startUpdates());
   }
 
   /// The phone's PC connection lives as long as the app so transfers and
@@ -72,6 +83,7 @@ class _NexGalleryHomeState extends State<NexGalleryHome>
       );
       setState(() => _session = session);
       await session.initialize();
+      await DeviceBridge.instance.configureBackground(_model.settings);
     } on Object {
       // Remote access stays unavailable; the local gallery still works.
     }
@@ -94,25 +106,55 @@ class _NexGalleryHomeState extends State<NexGalleryHome>
               : '${Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path}'
                     '\\nexGallery\\updates',
         ),
-        installer: android
-            ? (file) async {
-                if (!await DeviceBridge.instance.installApk(file.path)) {
-                  throw const FormatException(
-                    'Allow nexGallery to install updates, then tap Install again.',
-                  );
-                }
-              }
-            : runWindowsInstaller,
+        installer: (file) async {
+          if (_model case final NexGalleryRuntime runtime) {
+            await runtime.flush();
+          }
+          if (android) {
+            if (!await DeviceBridge.instance.installApk(file.path)) {
+              throw const FormatException(
+                'Allow nexGallery to install updates, then tap Install again.',
+              );
+            }
+          } else {
+            await runWindowsInstaller(file);
+          }
+        },
       );
       if (!mounted) return;
       AppUpdater.instance = updater;
       setState(() => _updater = updater);
       await Future<void>.delayed(const Duration(seconds: 4));
       if (!mounted || !_model.settings.checkForUpdates) return;
-      await updater.check();
+      await _checkUpdates();
       await updater.cleanUp();
     } on Object {
       // Updates are optional; the gallery keeps working offline.
+    }
+  }
+
+  Future<void> _checkUpdates() async {
+    final updater = _updater;
+    if (updater == null ||
+        _checkingUpdate ||
+        !_model.settings.checkForUpdates ||
+        (_lastUpdateCheck != null &&
+            DateTime.now().difference(_lastUpdateCheck!) <
+                const Duration(minutes: 30))) {
+      return;
+    }
+    _checkingUpdate = true;
+    _lastUpdateCheck = DateTime.now();
+    try {
+      if (await updater.check() &&
+          mounted &&
+          updater.offering &&
+          updater.release?.build != _promptedBuild) {
+        _promptedBuild = updater.release!.build;
+        await showUpdateDialog(context, updater);
+      }
+    } finally {
+      _checkingUpdate = false;
     }
   }
 
@@ -130,13 +172,30 @@ class _NexGalleryHomeState extends State<NexGalleryHome>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_checkUpdates());
     if (state == AppLifecycleState.resumed &&
         (_model.settings.autoRefresh || !_isWindows)) {
       _model.refresh();
     }
     final session = _session;
+    if (state == AppLifecycleState.paused &&
+        session != null &&
+        (_model.settings.backgroundTransfers ||
+            (_model.settings.backgroundBackup &&
+                _model.settings.cameraBackup))) {
+      unawaited(
+        session
+            .deactivate()
+            .then((_) => DeviceBridge.instance.runBackgroundNow())
+            .catchError((Object _) {}),
+      );
+    }
     if (state == AppLifecycleState.resumed && session != null) {
-      if (session.saved != null && !session.isConnected && !session.isBusy) {
+      if (!session.ownsSession) {
+        unawaited(session.initialize());
+      } else if (session.saved != null &&
+          !session.isConnected &&
+          !session.isBusy) {
         unawaited(session.reconnect());
       } else {
         unawaited(session.backUpCamera());
@@ -218,7 +277,7 @@ class _NexGalleryHomeState extends State<NexGalleryHome>
                     NavigationRailDestination(
                       icon: Icon(destination.icon),
                       selectedIcon: Icon(destination.selectedIcon),
-                      label: Text(destination.label),
+                      label: AppText(destination.label),
                     ),
                 ],
               ),
@@ -240,7 +299,7 @@ class _NexGalleryHomeState extends State<NexGalleryHome>
             NavigationDestination(
               icon: Icon(destination.icon),
               selectedIcon: Icon(destination.selectedIcon),
-              label: destination.label,
+              label: context.tr(destination.label),
             ),
         ],
       ),
@@ -332,7 +391,7 @@ class _Brand extends StatelessWidget {
           ),
           if (!compact) ...[
             const SizedBox(width: 10),
-            Text(
+            AppText(
               'nexGallery',
               style: Theme.of(context).textTheme.titleLarge
                   ?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.4),
@@ -368,7 +427,7 @@ class _LocalFirstBadge extends StatelessWidget {
               color: scheme.onSecondaryContainer,
             ),
             const SizedBox(width: 6),
-            Text(
+            AppText(
               'Local first',
               style: TextStyle(
                 color: scheme.onSecondaryContainer,

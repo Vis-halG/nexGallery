@@ -1,14 +1,15 @@
 # nexGallery
 
 Privacy-first Android and Windows gallery, local file manager and personal PC
-server. Phases 1-5 of the product plan are implemented; this is a
-development build that has not been released or signed.
+server. Version 0.2 adds a remote PC library, an offline photo map, English/Hindi
+UI, encrypted catalogue storage and one-action update prompts. Direct-download
+builds are early access; device certification and store submission remain separate.
 
 The complete scope, architecture, device matrix and phases live in
 [the product and build plan](docs/NEXGALLERY_PRODUCT_AND_BUILD_PLAN.md).
 [Implementation status](docs/IMPLEMENTATION_STATUS.md),
 [tech stack](docs/TECH_STACK.md) and
-[latest verification](docs/verification-2026-10-18.md) describe the current build.
+[latest verification](docs/verification-2026-10-29.md) describe the current build.
 Security and release documents: [threat model](docs/THREAT_MODEL.md),
 [privacy](docs/PRIVACY.md), [Play declarations](docs/PLAY_DECLARATIONS.md),
 [release, update and rollback](docs/RELEASE.md) and
@@ -22,11 +23,16 @@ Security and release documents: [threat model](docs/THREAT_MODEL.md),
 - **PC gallery:** chosen folders, drives and USB media with watchers; renamed or
   moved files keep their albums, favorites and face names.
 - **Offline intelligence:** faces and People, text in photos, object labels,
-  places, duplicates and similar photos, all on the device.
+  places with a bundled offline map, duplicates and similar photos, all on the device.
+- **PC library on the phone:** authorized timeline, albums and People with
+  cursor pages and a bounded delta feed; private paths and face vectors stay on the PC.
+- **Device privacy:** optional AES-256-GCM catalogue encryption; its key is
+  protected by Android Keystore or Windows DPAPI. English and Hindi in Settings.
 - **Personal PC server:** pairing by QR code with owner approval, per-phone
   permissions, signed requests, TLS pinned to the PC, background agent at
   Windows sign-in, LAN discovery, Tailscale for access away from home.
-- **Transfers:** resumable phone-PC transfers, camera backup, offline copies,
+- **Transfers:** resumable phone-PC transfers, opt-in scheduled Android camera
+  backup and background handoff, encrypted offline copies,
   smaller video copies on mobile data (needs FFmpeg on the PC), Wake-on-LAN.
 - **Safety:** read-only by default, version checks against silent overwrites,
   Defender scan before uploaded programs or archives appear, fingerprint/PIN
@@ -40,8 +46,10 @@ Download the latest build from
 [Releases](https://github.com/Vis-halG/nexGallery/releases/latest):
 `nexGallery-…-arm64-v8a.apk` for most phones (`armeabi-v7a` for older ones)
 and `nexGallery-…-windows-x64-setup.exe` for the PC. Every push to `main`
-publishes a new release; installed apps show an "Update" banner and update
-themselves (see [release](docs/RELEASE.md)).
+publishes a new release after tests and API 24/29/33/36 native checks pass.
+Installed release builds show an update popup; Update downloads and verifies the
+file and opens the installer. Android requires system confirmation. See
+[first install and updates](docs/UPDATES.md), including migration from testing APKs.
 
 ## Targets
 
@@ -60,6 +68,9 @@ flutter test                       # add --exclude-tags performance to skip the 
 dart run windows/server/test/remote_server_smoke_test.dart
 dart run tool/build_server.dart
 dart run windows/server/test/compiled_exe_smoke_test.dart
+dart run tool/security_audit.dart
+dart run tool/transfer_soak.dart --mib=64
+dart run tool/verify_ffmpeg.dart   # needs FFmpeg and ffprobe
 ```
 
 Run on an Android device with `flutter run -d <device-id>`. For Windows, install

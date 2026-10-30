@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../services/remote/transfer_queue.dart';
@@ -36,7 +38,7 @@ class TransfersSheet extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: Text(
+                    child: AppText(
                       'Transfers',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
@@ -44,17 +46,17 @@ class TransfersSheet extends StatelessWidget {
                   if (active > 0) ...[
                     TextButton(
                       onPressed: queue.pauseAll,
-                      child: const Text('Pause all'),
+                      child: const AppText('Pause all'),
                     ),
                     TextButton(
                       onPressed: queue.resumeAll,
-                      child: const Text('Resume all'),
+                      child: const AppText('Resume all'),
                     ),
                   ],
                   if (jobs.any((job) => job.isFinished))
                     TextButton(
                       onPressed: queue.clearFinished,
-                      child: const Text('Clear finished'),
+                      child: const AppText('Clear finished'),
                     ),
                 ],
               ),
@@ -69,7 +71,7 @@ class TransfersSheet extends StatelessWidget {
               if (jobs.isEmpty)
                 const Padding(
                   padding: EdgeInsets.all(24),
-                  child: Text(
+                  child: AppText(
                     'No transfers. Uploads, camera backup and offline copies appear here and resume automatically after interruptions.',
                     textAlign: TextAlign.center,
                   ),
@@ -144,7 +146,7 @@ class _TransferTile extends StatelessWidget {
                 if (job.status == TransferStatus.running ||
                     job.status == TransferStatus.queued)
                   IconButton(
-                    tooltip: 'Pause',
+                    tooltip: context.tr('Pause'),
                     onPressed: () => queue.pause(job.id),
                     icon: const Icon(Icons.pause_rounded),
                   ),
@@ -163,7 +165,7 @@ class _TransferTile extends StatelessWidget {
                   ),
                 if (!job.isFinished)
                   IconButton(
-                    tooltip: 'Cancel',
+                    tooltip: context.tr('Cancel'),
                     onPressed: () => queue.cancel(job.id),
                     icon: const Icon(Icons.close_rounded),
                   ),
@@ -182,17 +184,17 @@ class _TransferTile extends StatelessWidget {
                   TextButton(
                     onPressed: () =>
                         queue.resolveConflict(job.id, ConflictPolicy.keepBoth),
-                    child: const Text('Keep both'),
+                    child: const AppText('Keep both'),
                   ),
                   TextButton(
                     onPressed: () =>
                         queue.resolveConflict(job.id, ConflictPolicy.replace),
-                    child: const Text('Replace'),
+                    child: const AppText('Replace'),
                   ),
                   TextButton(
                     onPressed: () =>
                         queue.resolveConflict(job.id, ConflictPolicy.skip),
-                    child: const Text('Skip'),
+                    child: const AppText('Skip'),
                   ),
                 ],
               ),

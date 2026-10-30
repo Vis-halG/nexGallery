@@ -1,8 +1,11 @@
+import '../data/android_media/android_catalog_item.dart';
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:cryptography/cryptography.dart';
 
 import '../core/catalog_models.dart';
 import '../core/media_item.dart';
@@ -12,10 +15,14 @@ import '../data/device/device_bridge.dart';
 import '../data/local_media_scanner.dart';
 import '../data/media_catalog_repository.dart';
 import '../data/gallery_preferences_store.dart';
+import '../data/catalog_key.dart';
+import '../data/encrypted_catalog_persistence.dart';
+import '../data/sqlite_catalog_persistence.dart';
 import '../data/windows_files/windows_folder_watcher.dart';
 import 'gallery_model.dart';
 import 'gallery_organizer.dart';
 import 'gallery_tools.dart';
+import 'catalog_security.dart';
 import '../services/files/recoverable_trash.dart';
 import '../services/files/file_tools.dart';
 import '../services/organization/memories.dart';
@@ -24,7 +31,7 @@ import '../services/organization/organization_backup.dart';
 import 'package:path/path.dart' as p;
 
 final class NexGalleryRuntime extends ChangeNotifier
-    implements GalleryModel, GalleryTools, GalleryOrganizer {
+    implements GalleryModel, GalleryTools, GalleryOrganizer, CatalogSecurity {
   NexGalleryRuntime({
     TargetPlatform? platform,
     LocalMediaScanner? scanner,
@@ -52,6 +59,89 @@ final class NexGalleryRuntime extends ChangeNotifier
   final String? dataDirectory;
 
   MediaCatalogRepository? _repository;
+  bool _catalogueEncrypted = false;
+  Future<void> _securityQueue = Future.value();
+  @override
+  bool get catalogueEncrypted => _catalogueEncrypted;
+
+  Future<void> flush() async {
+    await _configurationQueue;
+    await _securityQueue;
+    await _repository?.flush();
+  }
+
+  Future<SecretKey> _catalogKey({required bool create}) => CatalogKey.load(
+    Directory(_dataDirectory!),
+    create: create,
+    readSecret: Platform.isAndroid
+        ? () => _android.readSecret(CatalogKey.secretName)
+        : null,
+    writeSecret: Platform.isAndroid
+        ? (value) => _android.storeSecret(CatalogKey.secretName, value)
+        : null,
+  );
+
+  @override
+  Future<void> setCatalogueEncryption(bool enabled) {
+    final result = _securityQueue.then((_) => _setCatalogueEncryption(enabled));
+    _securityQueue = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  Future<void> _setCatalogueEncryption(bool enabled) async {
+    if (_disposed) throw StateError('Gallery is closed.');
+    if (enabled == _catalogueEncrypted) return;
+    final repository = _repository;
+    final directory = _dataDirectory;
+    if (repository == null || directory == null) {
+      throw StateError('Initialize the gallery before changing encryption.');
+    }
+    final encrypted = _join(directory, 'catalog.enc');
+    if (enabled) {
+      final key = await _catalogKey(create: true);
+      await repository.migratePersistence(
+        EncryptedCatalogPersistence(encrypted, key),
+        commit: () async {
+          _catalogueEncrypted = true;
+          // The repository queue holds new writes until all old copies have
+          // been removed, including recovery/backup files from earlier runs.
+          await for (final file in Directory(directory).list()) {
+            if (file is! File) continue;
+            final name = p.basename(file.path);
+            if (const [
+                  'catalog.sqlite',
+                  'catalog.sqlite-wal',
+                  'catalog.sqlite-shm',
+                  'catalog.json',
+                ].contains(name) ||
+                RegExp(
+                  r'^catalog\.(sqlite|json)\.(bak|corrupt|backup|recovered|previous)(\.|$)',
+                ).hasMatch(name)) {
+              await file.delete();
+            }
+          }
+        },
+      );
+    } else {
+      await repository.migratePersistence(
+        SqliteCatalogPersistence(_join(directory, 'catalog.sqlite')),
+        commit: () async {
+          // Remove the recovery copy first so an interrupted switch still
+          // opens the complete encrypted primary on the next startup.
+          for (final suffix in ['.previous', '']) {
+            final file = File('$encrypted$suffix');
+            if (await file.exists()) await file.delete();
+          }
+          _catalogueEncrypted = false;
+        },
+      );
+    }
+    _safeNotify();
+  }
+
   StreamSubscription<CatalogSnapshot>? _repositorySubscription;
   StreamSubscription<WindowsFolderChange>? _folderSubscription;
   GalleryPreferencesStore? _preferencesStore;
@@ -246,7 +336,16 @@ final class NexGalleryRuntime extends ChangeNotifier
     try {
       _dataDirectory ??= dataDirectory ?? await _resolveDataDirectory();
       if (_disposed) return;
+      _catalogueEncrypted =
+          await File(_join(_dataDirectory!, 'catalog.enc')).exists() ||
+          await File(_join(_dataDirectory!, 'catalog.enc.previous')).exists();
       final opened = await MediaCatalogRepository.open(
+        persistence: _catalogueEncrypted
+            ? EncryptedCatalogPersistence(
+                _join(_dataDirectory!, 'catalog.enc'),
+                await _catalogKey(create: false),
+              )
+            : null,
         databaseFilePath: _join(_dataDirectory!, 'catalog.sqlite'),
         legacyJsonFilePath: _join(_dataDirectory!, 'catalog.json'),
       );
@@ -273,6 +372,7 @@ final class NexGalleryRuntime extends ChangeNotifier
       if (!isAndroid) _refreshView();
 
       if (isAndroid) {
+        if (dataDirectory == null) await _device.configureBackground(_settings);
         await _initializeAndroid();
       } else if (isWindows) {
         _folderSubscription = _folderWatcher.changes.listen((_) {
@@ -748,6 +848,9 @@ final class NexGalleryRuntime extends ChangeNotifier
     final saved = await _changeConfiguration(() async {
       final previous = _settings;
       await _persistConfiguration(settings: value);
+      if (isAndroid && dataDirectory == null) {
+        await _device.configureBackground(value);
+      }
       rescan =
           isWindows && previous.includeHiddenFiles != value.includeHiddenFiles;
       if (rescan) _invalidateWindowsScan();
@@ -1314,61 +1417,7 @@ final class NexGalleryRuntime extends ChangeNotifier
     }
   }
 
-  MediaItem _fromAndroid(AndroidMediaItem item) {
-    final now = DateTime.now().toUtc();
-    final modified = item.dateModifiedSeconds == null
-        ? now
-        : DateTime.fromMillisecondsSinceEpoch(
-            item.dateModifiedSeconds! * 1000,
-            isUtc: true,
-          );
-    final created = item.dateAddedSeconds == null
-        ? null
-        : DateTime.fromMillisecondsSinceEpoch(
-            item.dateAddedSeconds! * 1000,
-            isUtc: true,
-          );
-    final taken = item.dateTakenMilliseconds == null
-        ? null
-        : DateTime.fromMillisecondsSinceEpoch(
-            item.dateTakenMilliseconds!,
-            isUtc: true,
-          );
-    final kind = switch (item.type) {
-      AndroidMediaType.image => MediaKind.image,
-      AndroidMediaType.video => MediaKind.video,
-      AndroidMediaType.audio => MediaKind.audio,
-    };
-    final name =
-        item.displayName ?? item.title ?? '${item.type.name}-${item.id}';
-    return MediaItem(
-      id: 'android_${item.type.name}_${item.id}',
-      name: name,
-      uri: item.uri.toString(),
-      relativePath: item.relativePath ?? item.bucketName ?? '',
-      kind: kind,
-      source: MediaSource.phone,
-      metadata: MediaMetadata(
-        sizeBytes: item.sizeBytes ?? 0,
-        modifiedAt: modified,
-        createdAt: created,
-        takenAt: taken,
-        duration: item.durationMilliseconds == null
-            ? null
-            : Duration(milliseconds: item.durationMilliseconds!),
-        width: item.width,
-        height: item.height,
-        mimeType: item.mimeType,
-        extension: _extension(name),
-        attributes: <String, String>{
-          if (item.bucketName != null) 'bucket': item.bucketName!,
-          if (item.artist != null) 'artist': item.artist!,
-          if (item.album != null) 'album': item.album!,
-        },
-      ),
-      indexedAt: now,
-    );
-  }
+  MediaItem _fromAndroid(AndroidMediaItem item) => androidCatalogItem(item);
 
   CatalogQuery _viewQuery({int offset = 0}) {
     final section = switch (_collection) {
@@ -1573,12 +1622,6 @@ bool _pathIsWithin(String path, String root) {
   final candidate = normalized(path);
   final boundary = normalized(root);
   return candidate == boundary || candidate.startsWith('$boundary\\');
-}
-
-String? _extension(String name) {
-  final index = name.lastIndexOf('.');
-  if (index <= 0 || index == name.length - 1) return null;
-  return name.substring(index + 1).toLowerCase();
 }
 
 String _friendlyError(Object error) {

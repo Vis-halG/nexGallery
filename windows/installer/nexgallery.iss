@@ -67,9 +67,16 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/IM {#AgentExe} /F"; Flags: runhidd
 [Registry]
 ; The app adds this sign-in entry only when the owner turns on "Keep running
 ; when nexGallery is closed"; uninstalling always removes it.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "nexGalleryServer"; Flags: uninsdeletevalue dontcreatekey
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "nexGalleryServer"; ValueData: """{app}\server\bin\nexgallery_server.exe"" --config ""{localappdata}\nexGallery\server\agent.json"""; Flags: uninsdeletevalue dontcreatekey; Check: ServerAutoStartEnabled
 
 [Code]
+// Upgrades relocate the agent's complete native-asset bundle. Keep a user's
+// existing sign-in choice while avoiding an automatic opt-in on new installs.
+function ServerAutoStartEnabled: Boolean;
+begin
+  Result := RegValueExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'nexGalleryServer');
+end;
+
 // Upgrades replace the agent, so it must not be running.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var

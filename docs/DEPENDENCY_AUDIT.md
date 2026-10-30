@@ -1,4 +1,23 @@
-# Dependency audit — 18 October 2026
+# Dependency audit — 29 October 2026
+
+The current verification runs `dart run tool/security_audit.dart`. It creates a
+CycloneDX inventory and queries exact resolved Pub versions against OSV. The
+local audit checked 76 hosted package versions with no findings at that time.
+Release CI also supplies `releaseRuntimeClasspath` Maven coordinates. Network
+errors, incomplete responses or findings fail the audit rather than reporting
+success. Results are timestamped in `build/security/` and archived by release CI.
+
+This is package-level coverage, not proof that every vendored native codec,
+ONNX build or Flutter engine binary is free of vulnerabilities. The earlier
+manual dependency review below remains historical context.
+
+New dependencies/data: Flutter SDK `flutter_localizations` and its pinned `intl`
+dependency (BSD-3-Clause), and public-domain Natural Earth land polygons used
+entirely offline. The core APK does not download map tiles.
+Android background scheduling adds AndroidX WorkManager 2.12.0 (Apache-2.0),
+covered by the resolved Maven inventory in the release job. A local repeat
+with that Maven report encountered an OSV connection timeout; only a completed
+CI audit is accepted as evidence for the new native dependency graph.
 
 Flutter 3.47.4, Dart 3.13.3. Run again before each release:
 `flutter pub outdated`, `flutter pub deps --no-dev`, and a review of new

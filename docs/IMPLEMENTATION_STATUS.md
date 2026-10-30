@@ -1,7 +1,7 @@
 # nexGallery implementation status
 
-Updated 18 October 2026 against [the product and build plan](NEXGALLERY_PRODUCT_AND_BUILD_PLAN.md).
-Results and artifacts: [verification 18 October 2026](verification-2026-10-18.md).
+Updated 30 October 2026 against [the product and build plan](NEXGALLERY_PRODUCT_AND_BUILD_PLAN.md).
+Results and artifacts: [verification 29 October 2026](verification-2026-10-29.md).
 
 "Done" means implemented and covered by automated tests on this workstation.
 Physical Android devices, the native Windows app build (Visual Studio C++ is
@@ -52,7 +52,7 @@ compiled agent smoke test. Pairing codes last five minutes rather than the
 plan's two: each code works once, attempts are rate limited and the owner
 still approves every phone.
 
-## Phase 5 — internet and transfers: done (FFmpeg path unverified here)
+## Phase 5 — internet and transfers: implemented; real-network certification remains
 
 Tailscale setup steps with direct/relay status; private-network mode binds only
 loopback and Tailscale addresses; resumable, conflict-aware phone-PC transfer
@@ -61,8 +61,40 @@ backup; Wake-on-LAN; adaptive 360p/720p/1080p video proxies made by FFmpeg
 (GPU encoder when available) and chosen automatically on mobile data; PC kept
 awake during streams and transfers, plus "Keep this PC available".
 
-FFmpeg is not installed on this workstation, so a real transcode has not been
-run; the proxy pipeline is tested with a substitute transcoder.
+Real FFmpeg hardware transcoding, output format and decoding were verified.
+A 64 MiB pinned-TLS upload/download soak passed with interruption, fresh-client
+resume and matching SHA-256. Longer physical-network and battery runs remain external.
+
+Android now supports opt-in WorkManager camera backup and transfer handoff,
+with network/charging constraints, a bounded headless engine, foreground
+notification and cancellation. A native lease prevents the UI and worker from
+writing the transfer journal concurrently. The two background opt-ins are
+independent; user-paused work stays paused. Android controls actual execution
+time, and OEM/physical-device battery testing remains external.
+
+Remote offline copies and resumable staging files use chunked AES-256-GCM
+with an OS-protected key. Legacy complete copies migrate before plaintext is
+removed. Opening/sharing/exporting explicitly decrypts a temporary private copy;
+old temporary views are pruned on startup and clearing offline copies removes
+them. Publicly exported/shared copies are outside the app's encryption boundary.
+
+## Additional product features completed in 0.2
+
+- Authorized remote timeline, albums and People; HMAC-bound cursor pages and a
+  bounded delta journal with deletions and explicit resync on stale tokens.
+- Mobile PC library screen alongside folder browsing; the background agent
+  reads desktop metadata without mutating its database or exposing face vectors.
+- Offline Natural Earth photo map with zoom, grouped markers and photo viewing.
+- English/Hindi application copy, Material localization and saved language choice.
+  User-authored content is preserved; technical diagnostics may remain English.
+- Optional authenticated AES-256-GCM catalogue snapshots; Android Keystore or
+  Windows DPAPI protects the key. Migration preserves albums/favorites and cleans
+  old catalogue copies. Originals/thumbnails/separate analysis caches retain
+  their existing protection; this is not whole-device encryption.
+- Update popup with verified download/install, retry and foreground rechecks.
+  Permanent Android signing, gated release builds, SBOM/OSV tooling and optional
+  trusted Windows signing. [First-install transition](UPDATES.md) is required
+  for the earlier development-signed, update-disabled APKs.
 
 ## Phase 6 — hardening and release: partly done
 
@@ -76,16 +108,18 @@ run; the proxy pipeline is tested with a substitute transcoder.
 | Privacy and Play | [PRIVACY.md](PRIVACY.md), [PLAY_DECLARATIONS.md](PLAY_DECLARATIONS.md) |
 | Battery guidance | In [RELEASE.md](RELEASE.md) |
 | Accessibility | Tooltips on every icon button, large-text and small-screen layout tests; a TalkBack/Narrator pass on devices is still needed |
-| Localization | Not started; the UI is English only |
-| Penetration test, fuzzing | Not started |
-| Signed releases | Needs the owner's Android keystore and a Windows code-signing certificate |
+| Localization | English and Hindi shipped; system Material controls localized; diagnostics may remain English |
+| Penetration test, fuzzing | Seeded parser/path/permission fuzz tests implemented; independent penetration test remains external |
+| Signed releases | Permanent Android release key configured; Windows supports owner-provided Authenticode credentials, otherwise its installer is unsigned |
 | Long transfers, physical devices | Needs ARM phones on API 24-36 and a real Windows build |
 
-## Remaining product scope
+## Work that still needs external evidence or credentials
 
-- Remote API: cursor-paged PC timeline/albums/people and a delta change feed
-  (phones browse folders and search today).
-- Map view for places; optional catalogue encryption for a high-security mode.
-- Windows service mode before sign-in (the plan defers it until ACLs are defined).
-- Localization, device accessibility review, penetration testing.
-- Store submission and signed artifacts.
+- Physical ARM32/ARM64 phones and OEM restrictions, real long-running network
+  transfers, Tailscale direct/relay paths and battery behavior.
+- Manual TalkBack/Narrator review and labelled real-library AI quality measurements.
+- Independent penetration testing and review of vendored native libraries/codecs;
+  OSV package checks are not a complete native-code vulnerability certification.
+- Trusted Windows code-signing certificate and Play/other store submission.
+- Windows service before sign-in stays intentionally deferred until a separate
+  account/ACL/credential design exists. The supported agent runs at user sign-in.

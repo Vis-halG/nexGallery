@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cryptography/cryptography.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
@@ -17,6 +19,10 @@ import 'security.dart';
 import 'sha256.dart';
 import 'tailscale.dart';
 import 'transfer_queue.dart';
+import 'encrypted_offline_store.dart';
+import 'backup_source.dart';
+import '../../core/gallery_settings.dart';
+export 'encrypted_offline_store.dart' show OfflineMedia;
 
 /// Keystore-backed storage for the pairing secret.
 abstract interface class SecretStore {
@@ -78,6 +84,8 @@ final class RemoteSession extends ChangeNotifier {
     required this.secrets,
     required this.dataDirectory,
     this.model,
+    this.backupSource,
+    this.background = false,
     DeviceBridge? device,
   }) : _device = device ?? DeviceBridge.instance {
     queue = TransferQueue(
@@ -85,14 +93,74 @@ final class RemoteSession extends ChangeNotifier {
       networkGate: _networkGate,
       resolveSource: _materialize,
       onFinished: _finished,
+      allowedJob: (job) =>
+          !background ||
+          (job.origin?.startsWith('camera:') == true
+              ? _settings.backgroundBackup && _settings.cameraBackup
+              : _settings.backgroundTransfers),
+      download: (client, entry, destination, progress) =>
+          _offline.download(client, entry, destination, progress),
     );
+    model?.addListener(_modelChanged);
   }
 
   final SecretStore secrets;
   final Directory dataDirectory;
   final GalleryModel? model;
+  final BackupSource? backupSource;
+  final bool background;
+  final _owner = 'session-$pid-${DateTime.now().microsecondsSinceEpoch}';
+  bool _ownsSession = false, _disposed = false, _notifierDisposed = false;
+  Future<void>? _closing;
+  Future<void>? _deactivating;
+  Future<int>? _backingUp;
+  Future<void> _backupSaving = Future.value();
+  Completer<void>? _operationDone;
+  int _epoch = 0;
+  bool get ownsSession => _ownsSession;
+  GallerySettings get _settings =>
+      backupSource?.settings ?? model?.settings ?? const GallerySettings();
+  List<MediaItem>? get _sourceItems =>
+      backupSource?.items ?? _tools?.localItems;
   final DeviceBridge _device;
   late final TransferQueue queue;
+  late final _offline = EncryptedOfflineStore(downloads, _offlineKey);
+  Future<SecretKey>? _offlineKeyFuture;
+  Future<SecretKey> _offlineKey() => _offlineKeyFuture ??= _loadOfflineKey();
+
+  Future<SecretKey> _loadOfflineKey() async {
+    await dataDirectory.create(recursive: true);
+    final lock = await File(p.join(dataDirectory.path, 'offline-key.lock'))
+        .open(mode: FileMode.append);
+    await lock.lock(FileLock.blockingExclusive);
+    try {
+      final existing = await secrets.read('remote.offline.aes256.v1');
+      if (existing != null) {
+        final bytes = base64Decode(existing);
+        if (bytes.length != 32) {
+          throw const FormatException('Invalid offline encryption key.');
+        }
+        return SecretKey(bytes);
+      }
+      if (await downloads.exists() &&
+          await downloads
+              .list(recursive: true)
+              .any((v) => v.path.contains('.nexoffline'))) {
+        throw StateError(
+          'The OS offline key is unavailable. Cached copies cannot be opened.',
+        );
+      }
+      final key = await AesGcm.with256bits().newSecretKey();
+      await secrets.write(
+        'remote.offline.aes256.v1',
+        base64Encode(await key.extractBytes()),
+      );
+      return key;
+    } finally {
+      await lock.unlock();
+      await lock.close();
+    }
+  }
 
   NexGalleryRemoteClient? _client;
   RemoteInfo? _info;
@@ -129,13 +197,44 @@ final class RemoteSession extends ChangeNotifier {
       File(p.join(dataDirectory.path, 'camera-backup.json'));
 
   Future<void> initialize() async {
+    await _deactivating;
+    if (_disposed) return;
+    if (!_ownsSession) {
+      for (var attempt = 0; attempt < (background ? 1 : 60); attempt++) {
+        if (await _device.claimTransferSession(_owner)) {
+          _ownsSession = true;
+          break;
+        }
+        if (background || _disposed) return;
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    }
+    if (!_ownsSession) {
+      _error = 'Background transfers are finishing. Try reconnecting shortly.';
+      notifyListeners();
+      return;
+    }
     await dataDirectory.create(recursive: true);
+    await _pruneOfflineViews();
+    try {
+      await _offline.migrateLegacy();
+    } catch (error) {
+      _error = 'Could not secure offline copies: $error';
+      notifyListeners();
+      return;
+    }
     try {
       await queue.load();
     } on FormatException {
-      // A damaged transfer list starts empty; staged files are kept.
+      _error = 'The transfer journal could not be read. Existing files were preserved.';
+      notifyListeners();
+      return;
     }
     try {
+      final previous = File('${_backupState.path}.previous');
+      if (!await _backupState.exists() && await previous.exists()) {
+        await previous.rename(_backupState.path);
+      }
       if (await _backupState.exists()) {
         _backedUp = {
           ...(jsonDecode(await _backupState.readAsString()) as List)
@@ -161,7 +260,51 @@ final class RemoteSession extends ChangeNotifier {
     if (_saved != null) await reconnect();
   }
 
+  void _modelChanged() {
+    if (!_disposed && _ownsSession && isConnected && !background) {
+      unawaited(backUpCamera().catchError((Object _) => 0));
+    }
+  }
+
+  Future<void> deactivate() {
+    if (_deactivating case final running?) return running;
+    final result = _deactivate();
+    _deactivating = result;
+    return result.whenComplete(() => _deactivating = null);
+  }
+
+  Future<void> _deactivate() async {
+    final held = _ownsSession;
+    _ownsSession = false;
+    _epoch++;
+    _cancelPairing = true;
+    queue.beginHandoff();
+    _client?.close();
+    _client = null;
+    _info = null;
+    try {
+      await _operationDone?.future;
+      try {
+        await _backingUp;
+      } catch (_) {}
+      await queue.flush();
+      await _backupSaving;
+    } finally {
+      if (held) {
+        await _device.releaseTransferSession(_owner);
+      }
+    }
+    notifyListeners();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
   Future<T?> _run<T>(Future<T> Function() action) async {
+    if (_busy || _disposed) return null;
+    _operationDone = Completer<void>();
     _busy = true;
     _error = null;
     notifyListeners();
@@ -182,12 +325,22 @@ final class RemoteSession extends ChangeNotifier {
       _error = error.message;
     } finally {
       _busy = false;
+      _operationDone?.complete();
+      _operationDone = null;
       notifyListeners();
     }
     return null;
   }
 
-  Future<void> reconnect() => _run(() async {
+  Future<void> reconnect() async {
+    if (!_ownsSession) {
+      await initialize();
+      return;
+    }
+    await _reconnectOwned();
+  }
+
+  Future<void> _reconnectOwned() => _run(() async {
     final saved = _saved;
     if (saved == null) return;
     final client = NexGalleryRemoteClient(
@@ -255,6 +408,11 @@ final class RemoteSession extends ChangeNotifier {
     String code,
     String deviceName,
   ) async {
+    if (!_ownsSession) {
+      throw const FormatException(
+        'Wait for background transfers to finish before pairing.',
+      );
+    }
     final client = NexGalleryRemoteClient(
       baseUri: address,
       certificateFingerprint: fingerprint,
@@ -287,6 +445,9 @@ final class RemoteSession extends ChangeNotifier {
           await Future<void>.delayed(const Duration(seconds: 2));
         }
       }
+      if (_cancelPairing || !_ownsSession) {
+        throw const FormatException('Pairing cancelled.');
+      }
       final saved = SavedConnection(
         address: client.baseUri.toString(),
         fingerprint: client.certificateFingerprint!,
@@ -308,7 +469,12 @@ final class RemoteSession extends ChangeNotifier {
   void cancelPairing() => _cancelPairing = true;
 
   Future<void> _attach(NexGalleryRemoteClient client) async {
+    final epoch = _epoch;
     final info = await client.info();
+    if (!_ownsSession || epoch != _epoch || _disposed) {
+      client.close();
+      return;
+    }
     _client?.close();
     _client = client;
     _info = info;
@@ -330,6 +496,10 @@ final class RemoteSession extends ChangeNotifier {
       await secrets.write(_secretKey, jsonEncode(_saved!.toJson()));
     }
     await _updateConnectionLabel();
+    if (!_ownsSession || epoch != _epoch || _disposed) {
+      client.close();
+      return;
+    }
     queue.client = client;
     notifyListeners();
     unawaited(backUpCamera());
@@ -389,14 +559,14 @@ final class RemoteSession extends ChangeNotifier {
   /// The smaller copy to stream for [entry] on this network, or null for the
   /// original: Wi-Fi, an unsupported PC or the "Original" setting.
   Future<int?> streamQualityFor(RemoteEntry entry) async {
-    final quality = model?.settings.mobileVideoQuality ?? 720;
+    final quality = _settings.mobileVideoQuality;
     if (quality == 0 || _info?.videoProxy != true) return null;
     final network = await _device.network();
     return network.cellular || network.metered ? quality : null;
   }
 
   Future<String?> _networkGate() async {
-    if (!(model?.settings.transfersOnWifiOnly ?? false)) return null;
+    if (!_settings.transfersOnWifiOnly) return null;
     final network = await _device.network();
     if (!network.connected) return 'Waiting for a network connection.';
     if (network.cellular || network.metered) {
@@ -409,6 +579,17 @@ final class RemoteSession extends ChangeNotifier {
       model is GalleryTools ? model as GalleryTools : null;
 
   Future<File> _materialize(TransferJob job) async {
+    if (backupSource case final source?) {
+      final item = source.items
+          .where((v) => v.id == job.sourceItemId)
+          .firstOrNull;
+      if (item == null) {
+        throw const FileSystemException(
+          'The selected media is no longer available.',
+        );
+      }
+      return source.materialize(item);
+    }
     final tools = _tools;
     if (tools == null) {
       throw const FileSystemException('Gallery is unavailable.');
@@ -424,14 +605,41 @@ final class RemoteSession extends ChangeNotifier {
     final origin = job.origin;
     if (origin == null || !origin.startsWith('camera:')) return;
     _backedUp.add(origin.substring('camera:'.length));
-    unawaited(_saveBackupState());
+    unawaited(
+      _saveBackupState()
+          .then((_) async {
+            if (queue.jobs.length > 600) await queue.pruneFinished();
+            if (!_disposed && _ownsSession && !background) await backUpCamera();
+          })
+          .catchError((Object _) {
+            _error = 'Camera backup history could not be saved.';
+            notifyListeners();
+          }),
+    );
   }
 
-  Future<void> _saveBackupState() async {
+  Future<void> _saveBackupState() {
+    final result = _backupSaving
+        .catchError((Object _) {})
+        .then((_) => _writeBackupState());
+    _backupSaving = result;
+    return result;
+  }
+
+  Future<void> _writeBackupState() async {
     final temporary = File('${_backupState.path}.tmp');
     await temporary.writeAsString(jsonEncode(_backedUp.toList()), flush: true);
-    if (await _backupState.exists()) await _backupState.delete();
-    await temporary.rename(_backupState.path);
+    final previous = File('${_backupState.path}.previous');
+    if (await previous.exists()) await previous.delete();
+    if (await _backupState.exists()) await _backupState.rename(previous.path);
+    try {
+      await temporary.rename(_backupState.path);
+    } catch (_) {
+      if (!await _backupState.exists() && await previous.exists()) {
+        await previous.rename(_backupState.path);
+      }
+      rethrow;
+    }
   }
 
   static bool isCameraItem(MediaItem item) {
@@ -463,10 +671,18 @@ final class RemoteSession extends ChangeNotifier {
 
   /// Queues camera photos and videos that were not backed up yet. They are
   /// copied from the gallery only when their upload starts.
-  Future<int> backUpCamera() async {
-    final tools = _tools;
-    if (tools == null ||
-        model?.settings.cameraBackup != true ||
+  Future<int> backUpCamera({int limit = 200}) {
+    if (_backingUp case final running?) return running;
+    final result = _backUpCamera(limit);
+    _backingUp = result;
+    return result.whenComplete(() => _backingUp = null);
+  }
+
+  Future<int> _backUpCamera(int limit) async {
+    final items = _sourceItems;
+    if (items == null ||
+        (background && !_settings.backgroundBackup) ||
+        !_settings.cameraBackup ||
         !isConnected ||
         !(_info?.allowWrites ?? false) ||
         !(_info?.allows(DeviceScope.upload) ?? false)) {
@@ -476,7 +692,11 @@ final class RemoteSession extends ChangeNotifier {
     final root = _uploadRoot;
     if (root == null) return 0;
     var added = 0;
-    for (final item in tools.localItems.where(isCameraItem)) {
+    final capacity =
+        (200 - queue.jobs.where((v) => !v.isFinished && queue.canRun(v)).length)
+            .clamp(0, limit);
+    for (final item in items.where(isCameraItem)) {
+      if (added >= capacity || !_ownsSession || !_settings.cameraBackup) break;
       final signature = backupSignature(item);
       if (_backedUp.contains(signature) ||
           queue.hasJobFor('camera:$signature')) {
@@ -490,7 +710,7 @@ final class RemoteSession extends ChangeNotifier {
         root: root,
         remotePath: '$cameraBackupFolder/$month/${item.name}',
         sourceItemId: item.id,
-        policy: ConflictPolicy.skip,
+        policy: ConflictPolicy.keepBoth,
         origin: 'camera:$signature',
       );
       added++;
@@ -536,41 +756,89 @@ final class RemoteSession extends ChangeNotifier {
   /// Where an offline copy of [entry] is kept.
   File offlineFile(RemoteEntry entry) {
     final id = sha256Hex(
-      utf8.encode('${_saved?.address}:${entry.root}:${entry.path}'),
+      utf8.encode(
+        '${_saved?.address}:${entry.root}:${entry.path}:${entry.version ?? entry.modifiedAt}:${entry.size}',
+      ),
     ).substring(0, 24);
-    return File(p.join(downloads.path, id, entry.name));
+    return File(p.join(downloads.path, '$id.nexoffline'));
   }
 
   Future<TransferJob> keepOffline(RemoteEntry entry) =>
       queue.enqueueDownload(entry: entry, destination: offlineFile(entry));
 
-  Future<List<File>> offlineFiles() async {
-    if (!await downloads.exists()) return const [];
-    return downloads
-        .list(recursive: true, followLinks: false)
-        .where((entity) => entity is File && !entity.path.endsWith('.part'))
-        .cast<File>()
-        .toList();
+  Future<List<OfflineMedia>> offlineFiles() => _offline.files();
+
+  Directory get _offlineViews => Directory(
+    p.join(
+      Directory.systemTemp.path,
+      'nexgallery-offline-view',
+      sha256Hex(utf8.encode(dataDirectory.absolute.path)).substring(0, 24),
+    ),
+  );
+
+  Future<void> _pruneOfflineViews() async {
+    final directory = _offlineViews;
+    if (!await directory.exists()) return;
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 30));
+    await for (final entry in directory.list(followLinks: false)) {
+      if (entry is Directory &&
+          (await entry.stat()).modified.isBefore(cutoff)) {
+        await entry.delete(recursive: true);
+      }
+    }
   }
+
+  Future<File> materializeOffline(OfflineMedia media) => _offline.materialize(
+    media,
+    Directory(
+      p.join(_offlineViews.path, p.basenameWithoutExtension(media.file.path)),
+    ),
+  );
 
   Future<int> offlineBytes() async {
     var total = 0;
     for (final file in await offlineFiles()) {
-      total += await file.length();
+      total += await file.file.length();
     }
     return total;
   }
 
   Future<void> clearOffline() async {
+    if (queue.jobs.any(
+      (v) => v.kind == TransferKind.download && !v.isFinished,
+    )) {
+      throw StateError(
+        'Cancel unfinished downloads before clearing offline copies.',
+      );
+    }
     if (await downloads.exists()) await downloads.delete(recursive: true);
+    if (await _offlineViews.exists()) {
+      await _offlineViews.delete(recursive: true);
+    }
+    await secrets.delete('remote.offline.aes256.v1');
+    _offlineKeyFuture = null;
     notifyListeners();
   }
 
   @override
   void dispose() {
-    queue.client = null;
-    _client?.close();
-    queue.dispose();
+    if (_notifierDisposed) return;
+    _notifierDisposed = true;
+    _disposed = true;
+    model?.removeListener(_modelChanged);
     super.dispose();
+    unawaited(close().catchError((Object _) {}));
+  }
+
+  Future<void> close() => _closing ??= _close();
+  Future<void> _close() async {
+    _disposed = true;
+    model?.removeListener(_modelChanged);
+    try {
+      await deactivate();
+    } finally {
+      queue.dispose();
+      if (!_notifierDisposed) dispose();
+    }
   }
 }

@@ -36,7 +36,29 @@ final class MediaCatalogRepository {
     );
   }
 
-  final CatalogPersistence _persistence;
+  CatalogPersistence _persistence;
+
+  /// Switches storage only after the complete current state is durably saved.
+  /// It shares the mutation queue so a favorite/scan cannot race migration.
+  Future<void> migratePersistence(
+    CatalogPersistence target, {
+    Future<void> Function()? commit,
+  }) {
+    if (_disposed) return Future.error(StateError('Catalogue is closed.'));
+    final result = _writeQueue.then((_) async {
+      await target.save(snapshot);
+      final previous = _persistence;
+      _persistence = target;
+      if (previous is CloseableCatalogPersistence) await previous.close();
+      if (commit != null) await commit();
+    });
+    _writeQueue = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
   final Map<String, MediaItem> _items;
   final Map<String, MediaAlbum> _albums;
   final StreamController<CatalogSnapshot> _changes =
@@ -46,6 +68,7 @@ final class MediaCatalogRepository {
   bool _disposed = false;
 
   Stream<CatalogSnapshot> get changes => _changes.stream;
+  Future<void> flush() => _writeQueue;
   int get itemCount => _items.length;
   int get albumCount => _albums.length;
 

@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -42,19 +44,19 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
             ),
             if (_current != null)
               IconButton(
-                tooltip: 'Create folder',
+                tooltip: context.tr('Create folder'),
                 onPressed: _loading ? null : _createFolder,
                 icon: const Icon(Icons.create_new_folder_outlined),
               ),
             FilledButton.tonalIcon(
               onPressed: _loading ? null : _chooseFolder,
               icon: const Icon(Icons.add_rounded),
-              label: const Text('Choose folder'),
+              label: const AppText('Choose folder'),
             ),
           ],
         ),
         const SizedBox(height: 8),
-        const Text(
+        const AppText(
           'Android lets nexGallery access only folders you choose. Access remains on this device.',
         ),
         const SizedBox(height: 12),
@@ -62,7 +64,7 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
           Row(
             children: [
               IconButton(
-                tooltip: 'Back',
+                tooltip: context.tr('Back'),
                 onPressed: _loading ? null : _goBack,
                 icon: const Icon(Icons.arrow_back_rounded),
               ),
@@ -74,7 +76,7 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
                 ),
               ),
               IconButton(
-                tooltip: 'Refresh folder',
+                tooltip: context.tr('Refresh folder'),
                 onPressed: _loading ? null : _loadCurrent,
                 icon: const Icon(Icons.refresh_rounded),
               ),
@@ -95,7 +97,7 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
                   const Icon(Icons.error_outline_rounded),
                   const SizedBox(width: 10),
                   Expanded(child: Text(_error!)),
-                  TextButton(onPressed: _reload, child: const Text('Retry')),
+                  TextButton(onPressed: _reload, child: const AppText('Retry')),
                 ],
               ),
             ),
@@ -117,11 +119,11 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
             children: [
               const Icon(Icons.folder_open_rounded, size: 42),
               const SizedBox(height: 10),
-              const Text('No device folder selected yet.'),
+              const AppText('No device folder selected yet.'),
               const SizedBox(height: 12),
               FilledButton(
                 onPressed: _chooseFolder,
-                child: const Text('Choose a folder'),
+                child: const AppText('Choose a folder'),
               ),
             ],
           ),
@@ -152,7 +154,7 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
       return const Card(
         child: Padding(
           padding: EdgeInsets.all(22),
-          child: Center(child: Text('This folder is empty.')),
+          child: Center(child: AppText('This folder is empty.')),
         ),
       );
     }
@@ -190,41 +192,41 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
                   if (!item.isDirectory)
                     const PopupMenuItem(
                       value: _DocumentAction.open,
-                      child: Text('Open'),
+                      child: AppText('Open'),
                     ),
                   if (!item.isDirectory)
                     const PopupMenuItem(
                       value: _DocumentAction.share,
-                      child: Text('Share'),
+                      child: AppText('Share'),
                     ),
                   const PopupMenuItem(
                     value: _DocumentAction.copy,
-                    child: Text('Copy to folder'),
+                    child: AppText('Copy to folder'),
                   ),
                   if (item.canDelete)
                     const PopupMenuItem(
                       value: _DocumentAction.move,
-                      child: Text('Move to folder'),
+                      child: AppText('Move to folder'),
                     ),
                   const PopupMenuItem(
                     value: _DocumentAction.zip,
-                    child: Text('Create ZIP'),
+                    child: AppText('Create ZIP'),
                   ),
                   if (!item.isDirectory &&
                       (item.name ?? '').toLowerCase().endsWith('.zip'))
                     const PopupMenuItem(
                       value: _DocumentAction.extract,
-                      child: Text('Extract ZIP'),
+                      child: AppText('Extract ZIP'),
                     ),
                   if (item.canRename)
                     const PopupMenuItem(
                       value: _DocumentAction.rename,
-                      child: Text('Rename'),
+                      child: AppText('Rename'),
                     ),
                   if (item.canDelete)
                     const PopupMenuItem(
                       value: _DocumentAction.delete,
-                      child: Text('Delete'),
+                      child: AppText('Delete'),
                     ),
                 ],
               ),
@@ -407,18 +409,18 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
           final confirmed = await showDialog<bool>(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('Delete this item?'),
+              title: const AppText('Delete this item?'),
               content: Text(
                 '${item.name ?? 'This item'} may be deleted immediately by its document provider.',
               ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
+                  child: const AppText('Cancel'),
                 ),
                 FilledButton(
                   onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Delete'),
+                  child: const AppText('Delete'),
                 ),
               ],
             ),
@@ -454,11 +456,11 @@ class _AndroidSafBrowserState extends State<AndroidSafBrowser> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: const AppText('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Save'),
+            child: const AppText('Save'),
           ),
         ],
       ),

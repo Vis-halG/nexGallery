@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -153,7 +155,7 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
           height: MediaQuery.sizeOf(context).height * 0.75,
           child: ListView(
             children: [
-              const ListTile(title: Text('Add an encrypted copy')),
+              const ListTile(title: AppText('Add an encrypted copy')),
               for (final item in items)
                 ListTile(
                   title: Text(item.name),
@@ -323,22 +325,22 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
     final value = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Unlock to export'),
+        title: const AppText('Unlock to export'),
         content: TextField(
           controller: password,
           obscureText: true,
           enableSuggestions: false,
           autocorrect: false,
-          decoration: const InputDecoration(labelText: 'Vault password'),
+          decoration: InputDecoration(labelText: context.tr('Vault password')),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: const AppText('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, password.text),
-            child: const Text('Unlock'),
+            child: const AppText('Unlock'),
           ),
         ],
       ),
@@ -353,18 +355,18 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete encrypted copy?'),
+        title: const AppText('Delete encrypted copy?'),
         content: Text(
           '${entry.name} will be permanently removed from this vault.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: const AppText('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
+            child: const AppText('Delete'),
           ),
         ],
       ),
@@ -375,27 +377,27 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Locked Folder'),
+      title: const AppText('Locked Folder'),
       actions: [
         if (_vault?.unlocked == true) ...[
           IconButton(
-            tooltip: 'Lock now',
+            tooltip: context.tr('Lock now'),
             onPressed: _lock,
             icon: const Icon(Icons.lock),
           ),
           PopupMenuButton<String>(
-            tooltip: 'Backup options',
+            tooltip: context.tr('Backup options'),
             enabled: !_busy,
             onSelected: (value) =>
                 value == 'export' ? _exportBackup() : _importBackup(),
             itemBuilder: (_) => const [
               PopupMenuItem(
                 value: 'export',
-                child: Text('Export encrypted backup'),
+                child: AppText('Export encrypted backup'),
               ),
               PopupMenuItem(
                 value: 'import',
-                child: Text('Restore from backup'),
+                child: AppText('Restore from backup'),
               ),
             ],
           ),
@@ -415,14 +417,14 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
             ),
           ),
         if (_vault == null)
-          const Text('Opening vault…')
+          const AppText('Opening vault…')
         else if (!_vault!.unlocked) ...[
           Text(
             _exists ? 'Unlock your folder' : 'Create a private folder',
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 12),
-          const Text(
+          const AppText(
             'Files and names are encrypted on this device. Keep your password safe; a forgotten password cannot be recovered.',
           ),
           const SizedBox(height: 16),
@@ -431,7 +433,7 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
             obscureText: true,
             enableSuggestions: false,
             autocorrect: false,
-            decoration: const InputDecoration(labelText: 'Password'),
+            decoration: InputDecoration(labelText: context.tr('Password')),
           ),
           if (!_exists)
             TextField(
@@ -439,7 +441,9 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
               obscureText: true,
               enableSuggestions: false,
               autocorrect: false,
-              decoration: const InputDecoration(labelText: 'Confirm password'),
+              decoration: InputDecoration(
+                labelText: context.tr('Confirm password'),
+              ),
             ),
           const SizedBox(height: 16),
           FilledButton(
@@ -447,19 +451,19 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
             child: Text(_exists ? 'Unlock' : 'Create vault'),
           ),
         ] else ...[
-          const Text(
+          const AppText(
             'Adding creates an encrypted copy. The original remains in your gallery until you remove it there.',
           ),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: _busy ? null : _add,
             icon: const Icon(Icons.add),
-            label: const Text('Add encrypted copy'),
+            label: const AppText('Add encrypted copy'),
           ),
           if (_vault!.entries.isEmpty)
             const Padding(
               padding: EdgeInsets.all(24),
-              child: Text('Your Locked Folder is empty.'),
+              child: AppText('Your Locked Folder is empty.'),
             ),
           for (final entry in _vault!.entries)
             ListTile(
@@ -473,11 +477,11 @@ class _VaultPageState extends State<VaultPage> with WidgetsBindingObserver {
                 itemBuilder: (_) => [
                   const PopupMenuItem(
                     value: 'export',
-                    child: Text('Export decrypted copy'),
+                    child: AppText('Export decrypted copy'),
                   ),
                   const PopupMenuItem(
                     value: 'delete',
-                    child: Text('Delete encrypted copy'),
+                    child: AppText('Delete encrypted copy'),
                   ),
                 ],
               ),

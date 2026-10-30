@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../core/catalog_models.dart';
@@ -64,7 +66,7 @@ class _LibraryPageState extends State<LibraryPage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
+                          AppText(
                             'Library',
                             style: Theme.of(context).textTheme.headlineMedium
                                 ?.copyWith(
@@ -72,7 +74,7 @@ class _LibraryPageState extends State<LibraryPage> {
                                   letterSpacing: -0.6,
                                 ),
                           ),
-                          Text(
+                          AppText(
                             'Your local collections and file categories',
                             style: TextStyle(
                               color: Theme.of(context)
@@ -84,7 +86,7 @@ class _LibraryPageState extends State<LibraryPage> {
                       ),
                     ),
                     IconButton.filledTonal(
-                      tooltip: 'Create album',
+                      tooltip: context.tr('Create album'),
                       onPressed: () => _createAlbum(context),
                       icon: const Icon(Icons.create_new_folder_rounded),
                     ),
@@ -231,7 +233,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 ),
                 sliver: SliverToBoxAdapter(
                   child: SearchBar(
-                    hintText: 'Search albums',
+                    hintText: context.tr('Search albums'),
                     leading: const Icon(Icons.search_rounded),
                     onChanged: (value) => setState(() => _albumFilter = value),
                   ),
@@ -279,17 +281,17 @@ class _LibraryPageState extends State<LibraryPage> {
                         subtitle: Text('${album.itemIds.length} items'),
                         trailing: model is GalleryOrganizer && !album.isReadOnly
                             ? PopupMenuButton<String>(
-                                tooltip: 'Album actions',
+                                tooltip: context.tr('Album actions'),
                                 onSelected: (action) =>
                                     _albumAction(album, action),
                                 itemBuilder: (_) => const [
                                   PopupMenuItem(
                                     value: 'rename',
-                                    child: Text('Rename'),
+                                    child: AppText('Rename'),
                                   ),
                                   PopupMenuItem(
                                     value: 'delete',
-                                    child: Text('Delete album'),
+                                    child: AppText('Delete album'),
                                   ),
                                 ],
                               )
@@ -315,7 +317,7 @@ class _LibraryPageState extends State<LibraryPage> {
         12,
       ),
       sliver: SliverToBoxAdapter(
-        child: Text(
+        child: AppText(
           label,
           style: Theme.of(context).textTheme.titleLarge
               ?.copyWith(fontWeight: FontWeight.w800),
@@ -383,13 +385,13 @@ class _LibraryPageState extends State<LibraryPage> {
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Create album'),
+        title: const AppText('Create album'),
         content: TextField(
           controller: controller,
           autofocus: true,
           textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(
-            labelText: 'Album name',
+          decoration: InputDecoration(
+            labelText: context.tr('Album name'),
             border: OutlineInputBorder(),
           ),
           onSubmitted: (value) => Navigator.pop(context, value),
@@ -397,11 +399,11 @@ class _LibraryPageState extends State<LibraryPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: const AppText('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Create'),
+            child: const AppText('Create'),
           ),
         ],
       ),
@@ -482,12 +484,12 @@ class _CollectionCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              Text(
+              AppText(
                 label,
                 style: Theme.of(context).textTheme.titleMedium
                     ?.copyWith(fontWeight: FontWeight.w800),
               ),
-              Text(
+              AppText(
                 description,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -526,7 +528,7 @@ class _CategoryCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    AppText(
                       _label(category.kind),
                       maxLines: 1,
                       style: const TextStyle(fontWeight: FontWeight.w700),
@@ -566,15 +568,15 @@ class _EmptyAlbums extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  AppText(
                     'No albums yet',
                     style: TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  Text('Create a virtual album without moving originals.'),
+                  AppText('Create a virtual album without moving originals.'),
                 ],
               ),
             ),
-            TextButton(onPressed: onCreate, child: const Text('Create')),
+            TextButton(onPressed: onCreate, child: const AppText('Create')),
           ],
         ),
       ),

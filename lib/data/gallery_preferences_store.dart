@@ -57,6 +57,10 @@ final class GalleryPreferences {
       'analyzeOnlyWhileCharging',
       'transfersOnWifiOnly',
       'cameraBackup',
+      'checkForUpdates',
+      'backgroundBackup',
+      'backgroundTransfers',
+      'backupOnlyWhileCharging',
     ]) {
       if (rawSettings.containsKey(key) && rawSettings[key] is! bool) {
         throw FormatException('Invalid $key setting.');
@@ -67,6 +71,14 @@ final class GalleryPreferences {
           (value) => value.name == rawSettings['appearance'],
         )) {
       throw const FormatException('Invalid appearance setting.');
+    }
+    if (rawSettings.containsKey('language') &&
+        !const ['system', 'en', 'hi'].contains(rawSettings['language'])) {
+      throw const FormatException('Invalid language setting.');
+    }
+    if (rawSettings.containsKey('backupIntervalMinutes') &&
+        !const [15, 60, 360].contains(rawSettings['backupIntervalMinutes'])) {
+      throw const FormatException('Invalid backup interval.');
     }
     return GalleryPreferences(
       settings: GallerySettings.fromJson(

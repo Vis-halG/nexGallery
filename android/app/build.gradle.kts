@@ -136,4 +136,5 @@ dependencies {
     implementation("androidx.media3:media3-effect:1.9.2")
     // Camera QR scanning for PC pairing; ZXing only, no Google services.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
 }

@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../core/catalog_models.dart';
@@ -155,7 +157,7 @@ class _PhotosPageState extends State<PhotosPage> {
     return Row(
       children: [
         IconButton(
-          tooltip: 'Clear selection',
+          tooltip: context.tr('Clear selection'),
           onPressed: () => setState(_selected.clear),
           icon: const Icon(Icons.close_rounded),
         ),
@@ -175,7 +177,7 @@ class _PhotosPageState extends State<PhotosPage> {
             ),
           ),
         IconButton(
-          tooltip: 'Select all loaded',
+          tooltip: context.tr('Select all loaded'),
           onPressed: () => setState(
             () => _selected.addAll(widget.model.items.map((item) => item.id)),
           ),
@@ -183,12 +185,12 @@ class _PhotosPageState extends State<PhotosPage> {
         ),
         if (!inTrash) ...[
           IconButton(
-            tooltip: 'Share selected',
+            tooltip: context.tr('Share selected'),
             onPressed: _busy ? null : () => _batch(organizer.shareAll(items)),
             icon: const Icon(Icons.share_rounded),
           ),
           IconButton(
-            tooltip: 'Move selected to Trash',
+            tooltip: context.tr('Move selected to Trash'),
             onPressed: _busy
                 ? null
                 : () => _batch(() async {
@@ -201,33 +203,45 @@ class _PhotosPageState extends State<PhotosPage> {
           ),
         ],
         PopupMenuButton<String>(
-          tooltip: 'More actions for selection',
+          tooltip: context.tr('More actions for selection'),
           enabled: !_busy,
           onSelected: (action) => _selectionAction(action, items),
           itemBuilder: (_) => [
             if (!inTrash) ...[
-              const PopupMenuItem(value: 'favorite', child: Text('Favorite')),
+              const PopupMenuItem(
+                value: 'favorite',
+                child: AppText('Favorite'),
+              ),
               const PopupMenuItem(
                 value: 'unfavorite',
-                child: Text('Remove favorite'),
+                child: AppText('Remove favorite'),
               ),
-              const PopupMenuItem(value: 'album', child: Text('Add to album')),
+              const PopupMenuItem(
+                value: 'album',
+                child: AppText('Add to album'),
+              ),
               if (albumId != null)
                 const PopupMenuItem(
                   value: 'remove-album',
-                  child: Text('Remove from this album'),
+                  child: AppText('Remove from this album'),
                 ),
-              const PopupMenuItem(value: 'archive', child: Text('Archive')),
+              const PopupMenuItem(value: 'archive', child: AppText('Archive')),
               if (widget.model is GalleryTools && images >= 2 && images <= 9)
                 const PopupMenuItem(
                   value: 'collage',
-                  child: Text('Create collage'),
+                  child: AppText('Create collage'),
                 ),
-              const PopupMenuItem(value: 'slideshow', child: Text('Slideshow')),
+              const PopupMenuItem(
+                value: 'slideshow',
+                child: AppText('Slideshow'),
+              ),
               if (widget.remoteSession?.allows(DeviceScope.upload) == true)
-                const PopupMenuItem(value: 'send', child: Text('Send to PC')),
+                const PopupMenuItem(
+                  value: 'send',
+                  child: AppText('Send to PC'),
+                ),
             ] else
-              const PopupMenuItem(value: 'restore', child: Text('Restore')),
+              const PopupMenuItem(value: 'restore', child: AppText('Restore')),
           ],
         ),
       ],
@@ -332,7 +346,7 @@ class _PhotosPageState extends State<PhotosPage> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
+            AppText(
               title,
               style: Theme.of(context).textTheme.headlineMedium
                   ?.copyWith(fontWeight: FontWeight.w900, letterSpacing: -0.6),
@@ -351,7 +365,7 @@ class _PhotosPageState extends State<PhotosPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton.filledTonal(
-              tooltip: 'Refresh library',
+              tooltip: context.tr('Refresh library'),
               onPressed: widget.model.loadState == GalleryLoadState.loading
                   ? null
                   : widget.model.refresh,
@@ -359,7 +373,7 @@ class _PhotosPageState extends State<PhotosPage> {
             ),
             const SizedBox(width: 8),
             IconButton.filledTonal(
-              tooltip: 'Change grid size',
+              tooltip: context.tr('Change grid size'),
               onPressed: () => setState(() {
                 _gridScale = switch (_gridScale) {
                   < 0.9 => 1,
@@ -372,7 +386,7 @@ class _PhotosPageState extends State<PhotosPage> {
             if (widget.onOpenSettings != null) ...[
               const SizedBox(width: 8),
               IconButton.filledTonal(
-                tooltip: 'Settings',
+                tooltip: context.tr('Settings'),
                 onPressed: widget.onOpenSettings,
                 icon: const Icon(Icons.settings_outlined),
               ),
@@ -389,12 +403,12 @@ class _PhotosPageState extends State<PhotosPage> {
       children: [
         SearchBar(
           controller: _searchController,
-          hintText: 'Search names, places, people, things or text',
+          hintText: context.tr('Search names, places, people, things or text'),
           leading: const Icon(Icons.search_rounded),
           trailing: [
             if (_searchController.text.isNotEmpty)
               IconButton(
-                tooltip: 'Clear search',
+                tooltip: context.tr('Clear search'),
                 onPressed: () {
                   _searchController.clear();
                   widget.model.setSearchText('');
@@ -445,7 +459,7 @@ class _PhotosPageState extends State<PhotosPage> {
             child: TextButton.icon(
               onPressed: _busy ? null : _emptyTrash,
               icon: const Icon(Icons.delete_forever_rounded),
-              label: const Text('Empty Trash'),
+              label: const AppText('Empty Trash'),
             ),
           ),
       ],
@@ -471,7 +485,7 @@ class _PhotosPageState extends State<PhotosPage> {
         GalleryCollection.archive => Icons.archive_outlined,
         GalleryCollection.trash => Icons.delete_outline_rounded,
       }, size: 18),
-      label: Text(label),
+      label: AppText(label),
     );
   }
 
@@ -662,16 +676,16 @@ class _PhotosPageState extends State<PhotosPage> {
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Delete permanently?'),
+            title: const AppText('Delete permanently?'),
             content: Text('${item.name} cannot be restored after this action.'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
+                child: const AppText('Cancel'),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Delete'),
+                child: const AppText('Delete'),
               ),
             ],
           ),

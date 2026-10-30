@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -116,11 +118,11 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
       canPop: !_busy,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Edit video'),
+          title: const AppText('Edit video'),
           actions: [
             TextButton(
               onPressed: !ready || _busy ? null : _save,
-              child: const Text('Save copy'),
+              child: const AppText('Save copy'),
             ),
           ],
         ),
@@ -129,13 +131,13 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           children: [
             if (_busy) ...[
               const LinearProgressIndicator(),
-              const Text('Exporting video…'),
+              const AppText('Exporting video…'),
               TextButton(
                 onPressed: () async {
                   _cancelled = true;
                   await _editor.cancel();
                 },
-                child: const Text('Cancel export'),
+                child: const AppText('Cancel export'),
               ),
             ],
             if (_error != null)
@@ -186,7 +188,7 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
               ),
               DropdownButtonFormField<int>(
                 initialValue: _rotation,
-                decoration: const InputDecoration(labelText: 'Rotate'),
+                decoration: InputDecoration(labelText: context.tr('Rotate')),
                 items: [
                   for (final v in [0, 90, 180, 270])
                     DropdownMenuItem(value: v, child: Text('$v°')),
@@ -194,19 +196,19 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                 onChanged: _busy ? null : (v) => setState(() => _rotation = v!),
               ),
               SwitchListTile(
-                title: const Text('Remove audio'),
+                title: const AppText('Remove audio'),
                 value: _mute,
                 onChanged: _busy ? null : (v) => setState(() => _mute = v),
               ),
               SwitchListTile(
-                title: const Text('Export at 720p'),
-                subtitle: const Text(
+                title: const AppText('Export at 720p'),
+                subtitle: const AppText(
                   'Re-encode a smaller-resolution MP4. File size depends on the source.',
                 ),
                 value: _compress,
                 onChanged: _busy ? null : (v) => setState(() => _compress = v),
               ),
-              const Text(
+              const AppText(
                 'The preview shows the source video. Edits are applied when you save a copy. Export support depends on the device codecs.',
               ),
             ],

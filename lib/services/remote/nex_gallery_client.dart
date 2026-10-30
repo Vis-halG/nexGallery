@@ -35,6 +35,28 @@ final class RemoteRoot {
   final String name;
 }
 
+final class RemoteCatalogPage {
+  const RemoteCatalogPage({
+    required this.items,
+    required this.total,
+    required this.changeToken,
+    this.nextCursor,
+  });
+  factory RemoteCatalogPage.fromJson(Map<String, dynamic> json) =>
+      RemoteCatalogPage(
+        items: (json['items'] as List)
+            .map((v) => Map<String, dynamic>.from(v as Map))
+            .toList(),
+        total: json['total'] as int,
+        changeToken: json['changeToken'] as String,
+        nextCursor: json['nextCursor'] as String?,
+      );
+  final List<Map<String, dynamic>> items;
+  final int total;
+  final String changeToken;
+  final String? nextCursor;
+}
+
 final class RemoteEntry {
   const RemoteEntry({
     required this.root,
@@ -299,6 +321,44 @@ final class NexGalleryRemoteClient {
 
   Future<RemoteInfo> info() async =>
       RemoteInfo.fromJson(await _json('GET', '/v1/info'));
+
+  /// Cursor pages from the PC's authorized gallery, albums and named people.
+  Future<RemoteCatalogPage> catalog({
+    String collection = 'timeline',
+    String? cursor,
+    String? root,
+    String? album,
+    String? person,
+    String query = '',
+    int limit = 100,
+  }) async {
+    if (!const ['timeline', 'albums', 'people'].contains(collection)) {
+      throw ArgumentError.value(collection, 'collection');
+    }
+    return RemoteCatalogPage.fromJson(
+      await _json(
+        'GET',
+        '/v1/catalog/$collection',
+        query: {
+          'limit': '$limit',
+          'cursor': ?cursor,
+          'root': ?root,
+          'album': ?album,
+          'person': ?person,
+          if (query.isNotEmpty) 'q': query,
+        },
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> catalogChanges(
+    String token, {
+    int limit = 100,
+  }) => _json(
+    'GET',
+    '/v1/catalog/changes',
+    query: {'since': token, 'limit': '$limit'},
+  );
 
   /// Tells the PC to forget this phone.
   Future<void> revokeSelf() async {
@@ -812,7 +872,16 @@ final class NexGalleryRemoteClient {
         'path': entry.path,
         if (quality != null) 'quality': '$quality',
       },
-      headers: {'range': ?range},
+      headers: {
+        'range': ?range,
+        if (entry.version != null)
+          'x-nex-file-version': entry.version!
+        else if (quality == null &&
+            entry.size != null &&
+            entry.modifiedAt != null)
+          'x-nex-file-version':
+              '${entry.size}:${entry.modifiedAt!.toUtc().microsecondsSinceEpoch}',
+      },
     );
     final response = await request.close().timeout(const Duration(seconds: 30));
     if (response.statusCode != 200 &&

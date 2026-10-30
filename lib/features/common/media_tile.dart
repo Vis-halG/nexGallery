@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/media_item.dart';
 import '../../src/gallery_model.dart';
+import '../../l10n/app_strings.dart';
 
 enum MediaTileAction {
   open,
@@ -99,7 +100,7 @@ class MediaTile extends StatelessWidget {
                               children: [
                                 Icon(entry.$2, size: 20),
                                 const SizedBox(width: 12),
-                                Text(entry.$3),
+                                AppText(entry.$3),
                               ],
                             ),
                           ),
@@ -409,7 +410,7 @@ class _SourceBadge extends StatelessWidget {
         children: [
           Icon(icon, size: 12, color: Colors.white),
           const SizedBox(width: 4),
-          Text(
+          AppText(
             label,
             style: const TextStyle(
               color: Colors.white,

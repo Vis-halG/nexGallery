@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -76,7 +78,7 @@ class _FilePreviewState extends State<FilePreview> with WidgetsBindingObserver {
               child: Image.file(
                 widget.file!,
                 errorBuilder: (_, _, _) =>
-                    const Text('Preview unavailable for this format.'),
+                    const AppText('Preview unavailable for this format.'),
               ),
             ),
           )
@@ -101,7 +103,7 @@ class _FilePreviewState extends State<FilePreview> with WidgetsBindingObserver {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   IconButton(
-                    tooltip: 'Play or pause',
+                    tooltip: context.tr('Play or pause'),
                     icon: const Icon(Icons.play_circle),
                     onPressed: () async {
                       if (_controller!.value.isPlaying) {
@@ -113,7 +115,7 @@ class _FilePreviewState extends State<FilePreview> with WidgetsBindingObserver {
                     },
                   ),
                   PopupMenuButton<double>(
-                    tooltip: 'Playback speed',
+                    tooltip: context.tr('Playback speed'),
                     onSelected: (v) => _controller!.setPlaybackSpeed(v),
                     itemBuilder: (_) => [
                       for (final v in [0.5, 1.0, 1.5, 2.0])

@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -39,7 +41,7 @@ class _StoragePageState extends State<StoragePage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Storage')),
+    appBar: AppBar(title: const AppText('Storage')),
     body: AnimatedBuilder(
       animation: widget.model,
       builder: (context, _) {
@@ -63,7 +65,7 @@ class _StoragePageState extends State<StoragePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      const AppText(
                         'Phone storage',
                         style: TextStyle(fontWeight: FontWeight.w800),
                       ),
@@ -128,7 +130,7 @@ class _StoragePageState extends State<StoragePage> {
               ),
             ),
             const SizedBox(height: 12),
-            Text(
+            AppText(
               'Biggest folders',
               style: Theme.of(context).textTheme.titleMedium,
             ),
@@ -145,14 +147,14 @@ class _StoragePageState extends State<StoragePage> {
                 trailing: Text(formatBytes(folder.bytes)),
               ),
             const SizedBox(height: 12),
-            Text(
+            AppText(
               'Free up space',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             if (insights.suggestions.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('No cleanup suggestions right now.'),
+                child: AppText('No cleanup suggestions right now.'),
               ),
             for (final suggestion in insights.suggestions)
               Card(
@@ -181,8 +183,10 @@ class _StoragePageState extends State<StoragePage> {
               Card(
                 child: ListTile(
                   leading: const Icon(Icons.content_copy_rounded),
-                  title: const Text('Duplicates and similar photos'),
-                  subtitle: const Text('Scan for exact copies and look-alikes'),
+                  title: const AppText('Duplicates and similar photos'),
+                  subtitle: const AppText(
+                    'Scan for exact copies and look-alikes',
+                  ),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => Navigator.push<void>(
                     context,

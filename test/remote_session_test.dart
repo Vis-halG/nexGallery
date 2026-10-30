@@ -157,8 +157,16 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 20));
       }
       expect(job.status, TransferStatus.done);
-      expect((await session.offlineFiles()).single.readAsStringSync(), 'notes');
-      expect(await session.offlineBytes(), 5);
+      final offline = (await session.offlineFiles()).single;
+      expect(
+        await (await session.materializeOffline(offline)).readAsString(),
+        'notes',
+      );
+      expect(
+        utf8.decode(await offline.file.readAsBytes(), allowMalformed: true),
+        isNot(contains('notes')),
+      );
+      expect(await session.offlineBytes(), greaterThan(5));
       await session.clearOffline();
       expect(await session.offlineFiles(), isEmpty);
     } finally {

@@ -1,3 +1,5 @@
+import '../../l10n/app_strings.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../core/media_item.dart';
@@ -125,13 +127,13 @@ class _MetadataEditorState extends State<MetadataEditor> {
   Widget build(BuildContext context) {
     final localizations = MaterialLocalizations.of(context);
     return AlertDialog(
-      title: const Text('Adjust date and location'),
+      title: const AppText('Adjust date and location'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
+            const AppText(
               'Corrections are saved in nexGallery and survive rescans. The original file is not rewritten.',
             ),
             const SizedBox(height: 16),
@@ -158,8 +160,8 @@ class _MetadataEditorState extends State<MetadataEditor> {
             const SizedBox(height: 12),
             DropdownButtonFormField<int>(
               initialValue: _shiftHours,
-              decoration: const InputDecoration(
-                labelText: 'Time-zone shift',
+              decoration: InputDecoration(
+                labelText: context.tr('Time-zone shift'),
                 helperText:
                     'Fix photos taken with the camera clock in another zone',
                 border: OutlineInputBorder(),
@@ -181,7 +183,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
               value: _clearLocation,
-              title: const Text('Remove location in nexGallery'),
+              title: const AppText('Remove location in nexGallery'),
               onChanged: (value) =>
                   setState(() => _clearLocation = value ?? false),
             ),
@@ -192,7 +194,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                   signed: true,
                   decimal: true,
                 ),
-                decoration: const InputDecoration(labelText: 'Latitude'),
+                decoration: InputDecoration(labelText: context.tr('Latitude')),
               ),
               TextField(
                 controller: _longitude,
@@ -200,7 +202,7 @@ class _MetadataEditorState extends State<MetadataEditor> {
                   signed: true,
                   decimal: true,
                 ),
-                decoration: const InputDecoration(labelText: 'Longitude'),
+                decoration: InputDecoration(labelText: context.tr('Longitude')),
               ),
             ],
             if (_error != null)
@@ -217,9 +219,9 @@ class _MetadataEditorState extends State<MetadataEditor> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: const AppText('Cancel'),
         ),
-        FilledButton(onPressed: _save, child: const Text('Save')),
+        FilledButton(onPressed: _save, child: const AppText('Save')),
       ],
     );
   }
