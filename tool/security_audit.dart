@@ -69,49 +69,57 @@ Future<void> main(List<String> arguments) async {
       'components': components,
     }),
   );
-  final http = HttpClient()..connectionTimeout = const Duration(seconds: 30);
   final findings = <Map<String, Object?>>[];
-  try {
-    for (var start = 0; start < queries.length; start += 100) {
-      final batch = queries.sublist(
-        start,
-        (start + 100).clamp(0, queries.length),
+  for (var start = 0; start < queries.length; start += 100) {
+    final batch = queries.sublist(
+      start,
+      (start + 100).clamp(0, queries.length),
+    );
+    // Use the system TLS/proxy transport consistently on Windows and CI.
+    // Bounded retries tolerate transient API failures without skipping a
+    // package or accepting an incomplete audit. No shell or insecure TLS.
+    final requestFile = File('build/security/osv-request.json');
+    await requestFile.writeAsString(jsonEncode({'queries': batch}));
+    final response = await Process.run(
+      Platform.isWindows ? 'curl.exe' : 'curl',
+      [
+        '--silent',
+        '--show-error',
+        '--fail',
+        '--retry',
+        '2',
+        '--retry-all-errors',
+        '--connect-timeout',
+        '15',
+        '--max-time',
+        '60',
+        '--header',
+        'Content-Type: application/json',
+        '--data-binary',
+        '@${requestFile.path}',
+        'https://api.osv.dev/v1/querybatch',
+      ],
+    );
+    if (response.exitCode != 0) {
+      throw StateError(
+        'OSV transport failed; audit is incomplete. ${response.stderr}',
       );
-      final request = await http.postUrl(
-        Uri.parse('https://api.osv.dev/v1/querybatch'),
-      );
-      request.headers.contentType = ContentType.json;
-      request.write(jsonEncode({'queries': batch}));
-      final response = await request.close().timeout(
-        const Duration(seconds: 60),
-      );
-      if (response.statusCode != 200) {
-        throw StateError(
-          'OSV returned HTTP ${response.statusCode}; audit is incomplete.',
-        );
+    }
+    final results =
+        (jsonDecode(response.stdout as String) as Map)['results'] as List;
+    if (results.length != batch.length) {
+      throw const FormatException('Incomplete OSV response.');
+    }
+    for (var i = 0; i < results.length; i++) {
+      final result = results[i] as Map;
+      if (result['next_page_token'] != null) {
+        throw StateError('OSV response needs pagination; audit is incomplete.');
       }
-      final results =
-          (jsonDecode(await utf8.decoder.bind(response).join())
-                  as Map)['results']
-              as List;
-      if (results.length != batch.length) {
-        throw const FormatException('Incomplete OSV response.');
-      }
-      for (var i = 0; i < results.length; i++) {
-        final result = results[i] as Map;
-        if (result['next_page_token'] != null) {
-          throw StateError(
-            'OSV response needs pagination; audit is incomplete.',
-          );
-        }
-        final vulns = result['vulns'] as List? ?? const [];
-        if (vulns.isNotEmpty) {
-          findings.add({'query': batch[i], 'vulnerabilities': vulns});
-        }
+      final vulns = result['vulns'] as List? ?? const [];
+      if (vulns.isNotEmpty) {
+        findings.add({'query': batch[i], 'vulnerabilities': vulns});
       }
     }
-  } finally {
-    http.close(force: true);
   }
   await File('build/security/osv-results.json').writeAsString(
     const JsonEncoder.withIndent('  ').convert({

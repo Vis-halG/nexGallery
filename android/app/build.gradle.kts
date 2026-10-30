@@ -137,4 +137,6 @@ dependencies {
     // Camera QR scanning for PC pairing; ZXing only, no Google services.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("androidx.work:work-runtime-ktx:2.12.0")
+    // Media3/WorkManager's older transitive Guava predates CVE-2026-102554.
+    implementation("com.google.guava:guava:33.7.2-android")
 }
