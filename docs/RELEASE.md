@@ -35,6 +35,9 @@ themselves are in [the product plan, §15](NEXGALLERY_PRODUCT_AND_BUILD_PLAN.md)
 1. `dart run tool/build_server.dart` builds the background agent; the
    Windows build preserves its native assets in `server/bin` and `server/lib`
    below the application directory. The build uses `dart build cli`.
+   CMake bundles the MSVC release redistributable DLLs beside the app and agent;
+   `tool/verify_windows_bundle.ps1` rejects an incomplete distribution. End users
+   do not need Flutter, Visual Studio or a separate developer SDK installation.
 2. `flutter build windows --release`, then
    `iscc /DAppVersion=X.Y.Z /DSign windows\installer\nexgallery.iss` with a
    configured `nexsign` SignTool (code-signing certificate with timestamping).

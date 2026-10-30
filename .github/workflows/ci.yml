@@ -137,7 +137,10 @@ jobs:
 
       # The CMake install step copies the background agent next to the app.
       - name: Build
-        run: flutter build windows --release
+        run: |
+          flutter build windows --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\tool\verify_windows_bundle.ps1
 
       - name: Installer (unsigned development build)
         shell: pwsh

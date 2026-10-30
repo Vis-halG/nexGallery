@@ -231,6 +231,7 @@ jobs:
             --dart-define=NEXGALLERY_UPDATES=true
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & .\tool\verify_windows_bundle.ps1
           & .\tool\sign_windows.ps1 -Files @('build\windows\x64\runner\Release\nex_gallery.exe', 'build\windows\x64\runner\Release\server\bin\nexgallery_server.exe')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
